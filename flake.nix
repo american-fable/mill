@@ -34,7 +34,7 @@
       millPrebuildVersion = "0.12.0"; # version of prebuild mill artifact
       version = "b449aaeeb6e"; # target version
       cacheDir = "cs_cache";
-      depsDir = "/tmp/${cacheDir}";
+      depsTmpDir = "/tmp/${cacheDir}";
 
       millPrebuild = pkgs.fetchurl {
         url = "https://repo1.maven.org/maven2/com/lihaoyi/mill-dist/${millPrebuildVersion}/mill-dist-${millPrebuildVersion}-assembly.jar";
@@ -76,22 +76,34 @@
          buildInputs = packagesList;
          nativeBuildInputs = packagesList ++ [millWrapper];
          src = ./.;
+
+         patchPhase = ''
+           sed -i "s/VcsVersion.vcsState().format()/\"${version}\"/g" "./build.mill"
+         '';
+
          buildPhase = ''
           runHook preBuild
 
-          mkdir -p ${depsDir}
-          COURSIER_CACHE='${depsDir}/' mill __.prepareOffline --all
-          echo content of cache is: $(ls -la ${depsDir})
+          mkdir -p ${depsTmpDir}
+          COURSIER_CACHE='${depsTmpDir}/' mill clean
+          COURSIER_CACHE='${depsTmpDir}/' mill __.prepareOffline --all
+          COURSIER_CACHE='${depsTmpDir}' cs fetch \
+            org.scala-lang::scala-compiler:2.13.15 \
+            org.scala-lang::scala-reflect:2.13.15 \
+            org.scala-lang::scala-library:2.13.15 \
+            org.typelevel::cats-core:2.12.0
+
+          echo content of cache is: $(ls -la ${depsTmpDir})
 
           echo "stripping out comments containing dates"
-          find ${depsDir} -name '*.properties' -type f -exec sed -i '/^#/d' {} \;
+          find ${depsTmpDir} -name '*.properties' -type f -exec sed -i '/^#/d' {} \;
           echo "removing non-reproducible accessory files"
-          find ${depsDir} -name '*.lock' -type f -print0 | xargs -r0 rm -rfv
-          find ${depsDir} -name '*.log' -type f -print0 | xargs -r0 rm -rfv
+          find ${depsTmpDir} -name '*.lock' -type f -print0 | xargs -r0 rm -rfv
+          find ${depsTmpDir} -name '*.log' -type f -print0 | xargs -r0 rm -rfv
           echo "removing runtime jar"
-          find ${depsDir} -name rt.jar -delete
+          find ${depsTmpDir} -name rt.jar -delete
           echo "removing empty directories"
-          find ${depsDir} -type d -empty -delete
+          find ${depsTmpDir} -type d -empty -delete
 
           runHook postBuild
          '';
@@ -99,7 +111,7 @@
          installPhase = ''
           runHook preInstall
           mkdir -p $out
-          cp -r ${depsDir} $out
+          cp -r ${depsTmpDir} $out
           runHook postInstall
          '';
          outputHashAlgo = "sha256";
@@ -107,26 +119,75 @@
          outputHash = "sha256-pcHBXPm/Pb95WIyjbeiiyLRg3XOvXZhD3CXoyqQEZ7M=";
          #outputHash = pkgs.lib.fakeHash;
       };
-      millBuild = pkgs.stdenv.mkDerivation {
-         name = "mill-${version}";
-         buildInputs = packagesList;
-         nativeBuildInputs = packagesList ++ [millWrapper millDependencies];
-         src = ./.;
-         doCheck = false;
-         patchPhase = ''
+
+      millLibs  = pkgs.stdenv.mkDerivation {
+        name = "mill-libs-${version}";
+        buildInputs = packagesList;
+        nativeBuildInputs = packagesList ++ [millWrapper millDependencies];
+        src = ./.;
+        doCheck = false;
+
+        patchPhase = ''
            sed -i "s/VcsVersion.vcsState().format()/\"${version}\"/g" "./build.mill"
-         '';
-         installPhase = ''
+        '';
+
+        buildPhase = ''
+          runHook preBuild
+
+          mkdir -p /tmp/home/
+          cp -r '${millDependencies}/' /tmp/home
+          _JAVA_OPTIONS=-Duser.home='/tmp/home' COURSIER_CACHE='${millDependencies}/${cacheDir}/' mill dist.publishLocal
+
+          runHook postBuild
+        '';
+
+        installPhase = ''
            runHook preInstall
-           echo cacheDir $(ls ${millDependencies}/${cacheDir})
-           COURSIER_CACHE='${millDependencies}/${cacheDir}/' mill dist.assembly
-           echo resul dir: $(ls out/dist/assembly.dest/)
-           mkdir -p $out/bin
-           cp out/dist/assembly.dest/mill $out/bin/
-           chmod +x $out/bin/mill
+           cp -r /tmp/home/ $out/
            runHook postInstall
          '';
       };
+
+      millBuild = pkgs.stdenv.mkDerivation {
+         name = "mill-${version}";
+         buildInputs = packagesList;
+         nativeBuildInputs = packagesList ++ [millWrapper millLibs millDependencies pkgs.makeWrapper];
+         src = ./.;
+         doCheck = false;
+
+         patchPhase = ''
+           sed -i "s/VcsVersion.vcsState().format()/\"${version}\"/g" "./build.mill"
+         '';
+
+         buildPhase = ''
+          runHook preBuild
+
+          COURSIER_CACHE='${millDependencies}/${cacheDir}/' mill dist.assembly
+
+          runHook postBuild
+         '';
+
+         installPhase = ''
+           runHook preInstall
+
+           mkdir -p $out/bin
+           #cp out/dist/assembly.dest/mill $out/bin/.mill
+           #chmod +x $out/bin/.mill
+
+           install -Dm555 out/dist/assembly.dest/mill "$out/bin/.mill"
+           makeWrapper $out/bin/.mill $out/bin/mill --set COURSIER_REPOSITORIES "ivy:file://${millLibs}/.ivy2/local/[organisation]/[module]/(scala_[scalaVersion]/)(sbt_[sbtVersion]/)[revision]/[type]s/[artifact](-[classifier]).[ext]"
+           runHook postInstall
+         '';
+      };
+
+      #
+      # TODO:
+      # 1) DONE put jars to custom repository folder instead of ~/.ivy2
+      # 2) configure 'courser' to use custom repository together with custom cache
+      # 3) use 'courser' to produce fat jar
+      #
+
+
     in {
       # shell providing pre-build version of mill for experimentation
       devShells.default = pkgs.mkShell { 
@@ -134,7 +195,8 @@
         shellHook = ''
           echo prebuild mill path: ${millPrebuild}
           echo git mill dependencies path: ${millDependencies}
-          echo git mill path: ${millBuild}
+          echo git mill libs path: ${millLibs}
+          echo final mill path: ${millBuild}
         '';
       };
       packages.mill = millBuild;
