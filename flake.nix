@@ -87,11 +87,6 @@
           mkdir -p ${depsTmpDir}
           COURSIER_CACHE='${depsTmpDir}/' mill clean
           COURSIER_CACHE='${depsTmpDir}/' mill __.prepareOffline --all
-          COURSIER_CACHE='${depsTmpDir}' cs fetch \
-            org.scala-lang::scala-compiler:2.13.15 \
-            org.scala-lang::scala-reflect:2.13.15 \
-            org.scala-lang::scala-library:2.13.15 \
-            org.typelevel::cats-core:2.12.0
 
           echo content of cache is: $(ls -la ${depsTmpDir})
 
