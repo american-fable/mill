@@ -163,6 +163,7 @@
           runHook preBuild
 
           COURSIER_CACHE='${millDependencies}/${cacheDir}/' mill dist.assembly
+          mill dist.assembly
 
           runHook postBuild
          '';
@@ -171,11 +172,10 @@
            runHook preInstall
 
            mkdir -p $out/bin
-           #cp out/dist/assembly.dest/mill $out/bin/.mill
-           #chmod +x $out/bin/.mill
-
            install -Dm555 out/dist/assembly.dest/mill "$out/bin/.mill"
-           makeWrapper $out/bin/.mill $out/bin/mill --set COURSIER_REPOSITORIES "ivy:file://${millLibs}/.ivy2/local/[organisation]/[module]/(scala_[scalaVersion]/)(sbt_[sbtVersion]/)[revision]/[type]s/[artifact](-[classifier]).[ext]"
+
+           makeWrapper $out/bin/.mill $out/bin/mill --set COURSIER_REPOSITORIES "ivy:file://${millLibs}/.ivy2/local/[organisation]/[module]/(scala_[scalaVersion]/)(sbt_[sbtVersion]/)[revision]/[type]s/[artifact](-[classifier]).[ext]|ivy2Local|central|sonatype:releases" --set COURSIER_CACHE="~/.cache/coursier/v1"
+
            runHook postInstall
          '';
       };
