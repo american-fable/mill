@@ -32,7 +32,7 @@
     let
       pkgs = import nixpkgs { inherit system; };
       millPrebuildVersion = "0.12.0"; # version of prebuild mill artifact
-      version = "b449aaeeb6e"; # target version
+      version = self.rev or "dirty"; # target version
       cacheDir = "cs_cache";
       depsTmpDir = "/tmp/${cacheDir}";
 
