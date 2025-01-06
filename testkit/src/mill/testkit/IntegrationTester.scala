@@ -3,6 +3,7 @@ package mill.testkit
 import mill.main.client.EnvVars.MILL_TEST_SUITE
 import mill.define.Segments
 import mill.eval.Evaluator
+import mill.main.client.OutFiles
 import mill.resolve.SelectMode
 import ujson.Value
 
@@ -17,7 +18,7 @@ import ujson.Value
  *                         is run with `--no-server`
  * @param workspaceSourcePath The folder in which the `build.mill` and project files being
  *                            tested comes from. These are copied into a temporary folder
- *                            and are no modified during tests
+ *                            and are not modified during tests
  * @param millExecutable What Mill executable to use.
  */
 class IntegrationTester(
@@ -110,7 +111,7 @@ object IntegrationTester {
           mill.resolve.ParseArgs.apply(Seq(selector0), SelectMode.Separated).getOrElse(???)
 
         val segments = selector._2.getOrElse(Segments()).value.flatMap(_.pathSegments)
-        os.read(workspacePath / "out" / segments.init / s"${segments.last}.json")
+        os.read(workspacePath / OutFiles.out / segments.init / s"${segments.last}.json")
       }
 
       /**
