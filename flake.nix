@@ -21,7 +21,7 @@
   description = "Mill Build Tool From Src";
 
   inputs = {
-    nixpkgs.url = "nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
     flake-utils.url = "github:numtide/flake-utils";
   };
   outputs = { 
@@ -82,6 +82,7 @@
       # https://github.com/jtojnar/nixpkgs-hammering/blob/6a4f88d82ab7d0a95cf21494896bce40f7a4ac22/explanations/missing-phase-hooks.md
       millDependencies = pkgs.stdenv.mkDerivation {
          name = "mill-dependencies-${version}";
+         doCheck = false;
          buildInputs = packagesList;
          nativeBuildInputs = packagesList ++ [millWrapper];
          src = ./.;
@@ -94,7 +95,6 @@
           mkdir -p ${depsTmpDir}
           COURSIER_CACHE='${depsTmpDir}/' mill clean
           COURSIER_CACHE='${depsTmpDir}/' mill __.prepareOffline --all
-
           echo content of cache is: $(ls -la ${depsTmpDir})
 
           echo "stripping out comments containing dates"
