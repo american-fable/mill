@@ -7,7 +7,9 @@
   #      so it has network access, but the output must always match the provided
   #      hash. Because of this, it performs a few extra 'clean up' steps,
   #      like stripping dates.
-  #   3) Building `mill` from source using the provided dependencies (without network access).
+  #   3) Ask mill to publish locally mill libs and copying those for next step
+  #   4) Building `mill` from source using the provided dependencies and libs (without network access).
+  #   5) creating mill wrapper with custom ivy repository in configration
   #
   # To build:
   #   nix build .#default
@@ -33,13 +35,13 @@
       pkgs = import nixpkgs { inherit system; };
       millPrebuildVersion = "0.12.0"; # version of prebuild mill artifact
       version = self.shortRev or "dirty"; # target version
-      cacheDir = "cs_cache";
+      cacheDir = "cs_cache"; # custom coursier cache folder name
       depsTmpDir = "/tmp/${cacheDir}";
+      localDefaultIvyPattern = "[organisation]/[module]/(scala_[scalaVersion]/)(sbt_[sbtVersion]/)[revision]/[type]s/[artifact](-[classifier]).[ext]";
+      millVersionPatch = ''
+        sed -i "s/VcsVersion.vcsState().format()/\"${version}\"/g" "./build.mill"
+      ''; # patch needed to inline version value because during build can't get it from git
 
-      millPrebuild = pkgs.fetchurl {
-        url = "https://repo1.maven.org/maven2/com/lihaoyi/mill-dist/${millPrebuildVersion}/mill-dist-${millPrebuildVersion}-assembly.jar";
-        hash = "sha256-w+IYHHDI8bxHYVK3yEVL7QKHlsduAfTMuFzz1s165Bo=";
-      };
       packagesList = with pkgs; [
         bashInteractive
         curl
@@ -47,6 +49,12 @@
         openjdk21
         coursier
       ];
+
+      millPrebuild = pkgs.fetchurl {
+        url = "https://repo1.maven.org/maven2/com/lihaoyi/mill-dist/${millPrebuildVersion}/mill-dist-${millPrebuildVersion}-assembly.jar";
+        hash = "sha256-w+IYHHDI8bxHYVK3yEVL7QKHlsduAfTMuFzz1s165Bo=";
+      };
+
       millWrapper = pkgs.stdenv.mkDerivation {
          name = "mill-${millPrebuildVersion}";
          buildInputs = packagesList;
@@ -67,19 +75,18 @@
            $out/bin/mill --help > /dev/null
          '';
        };
+
       # Fixed output derivation which has access to network connection
       # some based on https://github.com/com-lihaoyi/mill/discussions/1170#discussioncomment-3205984
       # Also, info about hooks:
       # https://github.com/jtojnar/nixpkgs-hammering/blob/6a4f88d82ab7d0a95cf21494896bce40f7a4ac22/explanations/missing-phase-hooks.md
       millDependencies = pkgs.stdenv.mkDerivation {
-         name = "mill-${version}-dependencies";
+         name = "mill-dependencies-${version}";
          buildInputs = packagesList;
          nativeBuildInputs = packagesList ++ [millWrapper];
          src = ./.;
 
-         patchPhase = ''
-           sed -i "s/VcsVersion.vcsState().format()/\"${version}\"/g" "./build.mill"
-         '';
+         patchPhase = millVersionPatch;
 
          buildPhase = ''
           runHook preBuild
@@ -115,23 +122,21 @@
          #outputHash = pkgs.lib.fakeHash;
       };
 
-      millLibs  = pkgs.stdenv.mkDerivation {
+      millLibraries  = pkgs.stdenv.mkDerivation {
         name = "mill-libs-${version}";
         buildInputs = packagesList;
         nativeBuildInputs = packagesList ++ [millWrapper millDependencies];
         src = ./.;
         doCheck = false;
 
-        patchPhase = ''
-           sed -i "s/VcsVersion.vcsState().format()/\"${version}\"/g" "./build.mill"
-        '';
+        patchPhase = millVersionPatch;
 
         buildPhase = ''
           runHook preBuild
 
           mkdir -p /tmp/home/
-          cp -r '${millDependencies}/' /tmp/home
-          _JAVA_OPTIONS=-Duser.home='/tmp/home' COURSIER_CACHE='${millDependencies}/${cacheDir}/' mill dist.publishLocal
+          cp -r '${millDependencies}/${cacheDir}/' /tmp/home
+          _JAVA_OPTIONS=-Duser.home='/tmp/home' COURSIER_CACHE='/tmp/home/${cacheDir}/' mill dist.publishLocal
 
           runHook postBuild
         '';
@@ -146,7 +151,7 @@
       millBuild = pkgs.stdenv.mkDerivation {
          name = "mill-${version}";
          buildInputs = packagesList;
-         nativeBuildInputs = packagesList ++ [millWrapper millLibs millDependencies pkgs.makeWrapper];
+         nativeBuildInputs = packagesList ++ [millWrapper millLibraries millDependencies pkgs.makeWrapper];
          src = ./.;
          doCheck = false;
 
@@ -155,11 +160,11 @@
          '';
 
          buildPhase = ''
-          runHook preBuild
+           runHook preBuild
 
-          COURSIER_CACHE='${millDependencies}/${cacheDir}/' mill dist.assembly
+           COURSIER_CACHE='${millDependencies}/${cacheDir}/' mill dist.assembly
 
-          runHook postBuild
+           runHook postBuild
          '';
 
          installPhase = ''
@@ -168,19 +173,12 @@
            mkdir -p $out/bin
            install -Dm555 out/dist/assembly.dest/mill "$out/bin/.mill"
 
-           makeWrapper $out/bin/.mill $out/bin/mill --set COURSIER_REPOSITORIES "ivy:file://${millLibs}/.ivy2/local/[organisation]/[module]/(scala_[scalaVersion]/)(sbt_[sbtVersion]/)[revision]/[type]s/[artifact](-[classifier]).[ext]|ivy2Local|central|sonatype:releases"
+           makeWrapper $out/bin/.mill $out/bin/mill \
+             --set COURSIER_REPOSITORIES "ivy:file://${millLibraries}/.ivy2/local/${localDefaultIvyPattern}|ivy2Local|central|sonatype:releases"
 
            runHook postInstall
          '';
       };
-
-      #
-      # TODO:
-      # 1) DONE put jars to custom repository folder instead of ~/.ivy2
-      # 2) configure 'courser' to use custom repository together with custom cache
-      # 3) use 'courser' to produce fat jar
-      #
-
 
     in {
       # shell providing pre-build version of mill for experimentation
@@ -189,7 +187,7 @@
         shellHook = ''
           echo prebuild mill path: ${millPrebuild}
           echo git mill dependencies path: ${millDependencies}
-          echo git mill libs path: ${millLibs}
+          echo git mill libraries path: ${millLibraries}
           echo final mill path: ${millBuild}
         '';
       };
