@@ -10,6 +10,14 @@ object `package` extends RootModule {
   // This module isn't really a ScalaModule, but we use it to generate
   // consolidated documentation using the Scaladoc tool.
   object site extends UnidocModule {
+    def unidocCompileClasspath =
+      super.unidocCompileClasspath().filter { ref =>
+        // Workaround for https://github.com/scala/bug/issues/10028
+        // We exclude the JAR of coursier/dependency here, so that
+        // scaladoc doesn't create an entry for its `dependency`
+        // package object in the Mill scaladoc.
+        !ref.path.lastOpt.exists(_.startsWith("dependency_2.13-"))
+      }
     def scalaVersion = build.Deps.scalaVersion
     def moduleDeps = build.millInternal.modules.collect {
       case m: build.MillStableScalaModule => m
@@ -160,24 +168,27 @@ object `package` extends RootModule {
   def devAntoraSources: T[PathRef] = Task {
     val dest = T.dest
     os.copy(source().path, dest, mergeFolders = true)
-    sanitizeAntoraYml(dest, "master", build.millVersion(), build.millLastTag())
+    sanitizeAntoraYml(
+      dest,
+      "main-branch",
+      "main-branch",
+      build.millLastTag()
+    )
     PathRef(dest)
   }
 
   def sanitizeAntoraYml(
       dest: os.Path,
       version: String,
-      millVersion: String,
+      displayVersion: String,
       millLastTag: String
   ): Unit = {
-    val isPreRelease = (millVersion != millLastTag) || Seq("-M", "-RC").exists(millVersion.contains)
+    val isPreRelease = version == "main-branch" || Seq("-M", "-RC").exists(version.contains)
+    val preReleaseSuffix = if (isPreRelease) "\nprerelease: true" else ""
     val lines = os.read(dest / "antora.yml").linesIterator.map {
       case s"version:$_" =>
-        if (isPreRelease)
-          s"version: '${version}'\ndisplay-version: '${millVersion}'\nprerelease: true"
-        else
-          s"version: '${version}'\ndisplay-version: '${millVersion}'"
-      case s"    mill-version:$_" => s"    mill-version: '$millVersion'"
+        s"version: '$version'\ndisplay-version: '$displayVersion'$preReleaseSuffix"
+      case s"    mill-version:$_" => s"    mill-version: '$millLastTag'"
       case s"    mill-last-tag:$_" => s"    mill-last-tag: '$millLastTag'"
       case l => l
     }
@@ -189,6 +200,12 @@ object `package` extends RootModule {
     os.write.over(dest / "antora.yml", (lines ++ newLines).mkString("\n"))
   }
 
+  def blogFolder0 = Task.Source(build.millSourcePath / "blog")
+  def blogFolder = Task{
+    os.copy(blogFolder0().path, Task.dest, mergeFolders = true)
+    expandDiagramsInDirectoryAdocFile(Task.dest, mill.main.VisualizeModule.classpath().map(_.path))
+    PathRef(Task.dest)
+  }
   def githubPagesPlaybookText(authorMode: Boolean) = T.task { extraSources: Seq[os.Path] =>
     val taggedSources = for (path <- extraSources) yield {
       s"""    - url: ${build.baseDir}
@@ -215,6 +232,9 @@ object `package` extends RootModule {
        |
        |    - url: ${build.baseDir}
        |      start_path: ${devAntoraSources().path.relativeTo(build.baseDir)}
+       |
+       |    - url: ${build.baseDir}
+       |      start_path: ${blogFolder().path.relativeTo(build.baseDir)}
        |ui:
        |  bundle:
        |    url: https://gitlab.com/antora/antora-ui-default/-/jobs/artifacts/master/raw/build/ui-bundle.zip?job=bundle-stable
@@ -241,14 +261,23 @@ object `package` extends RootModule {
   }
 
   def oldDocSources: T[Seq[PathRef]] = Task {
-    for (oldVersion <- build.Settings.docTags) yield {
-      val checkout = T.dest / oldVersion
+    val versionLabels =
+      build.Settings.docTags.map{v =>
+        val xVersion = v.split('.').dropRight(1).mkString(".") + ".x"
+        (v, xVersion, xVersion)
+      } ++
+      // Set the latest stable branch as the "master" docs that people default to
+      Seq((build.Settings.docTags.last, "master", s"latest-${build.Settings.docTags.last}"))
+
+    for ((millLastTag, version, displayVersion) <- versionLabels) yield {
+      val checkout = T.dest / displayVersion
       os.proc("git", "clone", T.workspace / ".git", checkout).call(stdout = os.Inherit)
-      os.proc("git", "checkout", oldVersion).call(cwd = checkout, stdout = os.Inherit)
+      os.proc("git", "checkout", millLastTag).call(cwd = checkout, stdout = os.Inherit)
       val outputFolder = checkout / "out" / "docs" / "source.dest"
       os.proc("./mill", "-i", "docs.source").call(cwd = checkout, stdout = os.Inherit)
       expandDiagramsInDirectoryAdocFile(outputFolder, mill.main.VisualizeModule.classpath().map(_.path))
-      sanitizeAntoraYml(outputFolder, oldVersion, oldVersion, oldVersion)
+
+      sanitizeAntoraYml(outputFolder, version, displayVersion, millLastTag)
       PathRef(outputFolder)
     }
   }
@@ -445,7 +474,12 @@ object `package` extends RootModule {
       .toMap
 
     val brokenLinksPerPath: Seq[(os.Path, Seq[(String, String)])] =
-      for ((path, remoteLinks, localLinks, ids) <- allLinksAndAnchors0) yield{
+      for {
+        (path, remoteLinks, localLinks, ids) <- allLinksAndAnchors0
+        // Skip scaladoc files when scanning for broken links because some
+        // of those are scaladoc bugs outside of our control.
+        if !path.segments.contains("api")
+      } yield{
         (
           path,
           localLinks.flatMap{case (elementString, url) =>

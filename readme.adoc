@@ -158,14 +158,14 @@ You can reproduce any of the tests manually using `dist.run`, e.g.
 
 [source,bash]
 ----
-./mill dist.run example/basic/1-simple run --text hello
+./mill dist.run example/javalib/basic/1-simple foo.run --text hello
 ----
 
 **Manual Test using Launcher Script**
 
 [source,bash]
 ----
-./mill dist.launcher && (cd example/javalib/basic/1-simple && ../../../../out/dist/launcher.dest/run run --text hello)
+./mill dist.launcher && (cd example/javalib/basic/1-simple && ../../../../out/dist/launcher.dest/run foo.run --text hello)
 ----
 
 === Sub-Process Tests *with* Packaging/Publishing
@@ -254,6 +254,14 @@ In case of troubles with caching and/or incremental compilation, you can always 
 ----
 rm -rf out/
 ----
+
+=== Autofix and Autoformatting
+
+To run all autofixes and autoformatters:
+
+```bash
+./mill __.fix + mill.javalib.palantirformat.PalantirFormatModule/ + mill.scalalib.scalafmt.ScalafmtModule/ + mill.kotlinlib.ktlint.KtlintModule/
+```
 
 == Project Layout
 
@@ -346,8 +354,118 @@ endif::[]
 // find-replace-regex: https://github.com/com-lihaoyi/mill/pull/(\d*) -> {link-pr}/$1[#$1]
 
 
+[#0-12-5]
+=== 0.12.5 - 2025-01-01
+:version: 0.12.5
+:milestone-name: 0.12.5
+:milestone: 108
+:prev-version: 0.12.4
+
+* Optimize Mill startup overhead by not blocking on stdin {link-pr}/4159[#4159]
+
+* Fix system console detection on JDK >=22 {link-pr}/4178[#4178]
+
+* Fix thread leak when spawning JVM subprocesses, which caused instability and unresponsiveness
+  in long-lived Mill processes {link-pr}/4185[#4185]
+
+* Fix crash in `mill -i` on Windows ARM64 {link-pr}/4196[#4196]
+
+* Fix log rendering in terminals where `\t` does not clear existing text {link-pr}/4173[#4173]
+
+* Fix generation of unnecessary `rt.jar` files in home folder {link-pr}/4206[#4206]
+
+* Addition of several experimental language toolchains, to support using Mill to build
+  projects in other languages
+
+** https://mill-build.org/mill/main-branch/pythonlib/intro.html[Experimental Python Support]
+
+** https://mill-build.org/mill/main-branch/javascriptlib/intro.html[Experimental Javascript/Typescript Support]
+
+* Lots of doc improvements:
+
+** Overhaul of https://mill-build.org/mill/depth/execution-model.html[The Mill Execution Model]
+   {link-pr}/4156[#4156]
+
+** Fix missing text in Java Module Configuration docs {link-pr}/4172[#4172]
+
+* Introduction of the https://mill-build.org/blog/index.html[Mill Engineering Blog],
+  with posts such as https://mill-build.org/blog/1-java-compile.html[How Fast does Java Compile?],
+  https://mill-build.org/blog/2-monorepo-build-tool.html[Why Use a Monorepo Build Tool?],
+  and https://mill-build.org/blog/3-selective-testing.html[Faster CI with Selective Testing]
+
+[#0-12-4]
+=== 0.12.4 - 2024-12-16
+:version: 0.12.4
+:milestone-name: 0.12.4
+:milestone: 107
+:prev-version: 0.12.3
+
+* Mill now supports https://mill-build.org/mill/large/selective-execution.html[Selective Execution],
+  allowing you to run tests and other tasks only if they are downstream of a code change.
+  This can be used to greatly speed up pull-request validation and other CI workflows
+  by skipping unrelated tests that cannot possibly be broken by the code change in question
+
+* Mill now generates https://mill-build.org/mill/fundamentals/out-dir.html#_mill_dependency_tree_json[dependency-tree.json]
+  and https://mill-build.org/mill/main-branch/fundamentals/out-dir.html#_mill_invalidation_tree_json[invalidation-tree.json]
+  metadata for every run, which should help make it easier for a user to figure out why a task
+  is being selected and run.
+
+* Support for Bill-Of-Materials/Dependency-Management when downloading third-party JVM dependencies
+  (https://mill-build.org/mill/main-branch/javalib/dependencies.html#_dependency_management[Documentation])
+
+* Built-in support for `mill.bat` launcher to run Mill natively on a Windows environment
+  https://github.com/com-lihaoyi/mill/pull/4052[#4052]
+
+* Added documentation for https://mill-build.org/mill/migrating/migrating.html[Migrating to Mill],
+  to try and help people who may be trying to move their existing codebase onto Mill from other build tools
+
+* Significant speedups for task resolution logic https://github.com/com-lihaoyi/mill/pull/4132[#4132],
+  which should speed up cached-build workflows in particular
+
+* Improve precision of code signature task invalidation, reducing the amount of spurious
+  task invalidations in the presence of multi-file builds https://github.com/com-lihaoyi/mill/pull/4113[#4113]
+  https://github.com/com-lihaoyi/mill/pull/4116[#4116]
+
+* Reduced overhead of terminal prompt UI https://github.com/com-lihaoyi/mill/pull/4095[#4095]
+  https://github.com/com-lihaoyi/mill/pull/4110[#4110]
+
+* Launch of the https://mill-build.org/blog[Mill Build Engineering Blog], where we will post articles
+  discussing topics around JVM build tooling
+
+[#0-12-3]
+=== 0.12.3 - 2024-11-24
+:version: 0.12.3
+:milestone-name: 0.12.3
+:milestone: 106
+:prev-version: 0.12.2
+
+* Set context classloader during Mill evaluation {link-pr}/3940[#3940]
+* Extended `mill init` to support importing an existing Maven project {link-pr}/3756[#3756]
+* Avoid running subsequent meta-level builds after reaching the desired meta-level in MillBuildBootstrap {link-pr}/3960[#3960]
+* Improvements to `KtlintModule` {link-pr}/3961[#3961] {link-pr}/3966[#3966]
+* Fixes for `runBackground` mutex and log management {link-pr}/3971[#3971]
+* Added support for Revapi {link-pr}/3974[#3974]
+* Fix redundant logging in junit5 test runner {link-pr}/3983[#3983]
+* align SonatypeCentralPublishModule with SonatypePublisher {link-pr}/3987[#3987]
+* Make JVM version configurable per-module {link-pr}/3716[#3716]
+* Overhaul worker concurrency helpers with `mill.api.CacheFactory` {link-pr}/4001[#4001]
+* Optimize startup time using TCP sockets instead of junixsocket and `tput` instead of jline {link-pr}/4009[#4009]
+* Improvements to TUI build prompt https://github.com/com-lihaoyi/mill/pull/3933[#3933] https://github.com/com-lihaoyi/mill/pull/4014[#4014]
+* Lots of improvements to documentation, including a new https://github.com/com-lihaoyi/mill/pull/3965[Kotlin Spring-Boot Example #3965],
+  a new page https://github.com/com-lihaoyi/mill/pull/3990[How Fast Does Java Compile? #3990], and
+  https://github.com/com-lihaoyi/mill/pull/3938[Stable Links To Older Doc-site Versions #3938]
+
+
+
+
 [#0-12-2]
 === 0.12.2 - 2024-11-11
+:version: 0.12.2
+:milestone-name: 0.12.2
+:milestone: 105
+:prev-version: 0.12.1
+
+_Changes since {prev-version}:_
 
 * Show correct build file name in progress prompt {link-pr}/3847[#3847]
 * Fix target name when reporting cycles in `runModuleDeps` {link-pr}/3860[#3860]
@@ -370,14 +488,26 @@ endif::[]
   added https://mill-build.org/mill/comparisons/why-mill.html[Why Use Mill?] and
   https://mill-build.org/mill/comparisons/unique.html[What Makes Mill Unique?] Sections
 
-
+_For details refer to
+{link-milestone}/{milestone}?closed=1[milestone {milestone-name}]
+and the {link-compare}/{prev-version}\...{version}[list of commits]._
 
 
 [#0-12-1]
 === 0.12.1 - 2024-10-27
+:version: 0.12.1
+:milestone-name: 0.12.1
+:milestone: 104
+:prev-version: 0.12.0
+
+_Changes since {prev-version}:_
 
 * Fix updating of prompt to match terminal width in client-server mode {link-pr}/3833[#3833]
 * Allow `.mill-jvm-opts` to interpolate environment variables, add `.mill-opts` {link-pr}/3841[#3841]
+
+_For details refer to
+{link-milestone}/{milestone}?closed=1[milestone {milestone-name}]
+and the {link-compare}/{prev-version}\...{version}[list of commits]._
 
 
 [#0-12-0]
@@ -408,7 +538,7 @@ Major changes:
 
 5. Mill now supports other JVM langauges: https://mill-build.org/mill/javalib/intro.html[Java],
    experimental support for https://mill-build.org/mill/kotlinlib/intro.html[Kotlin/KotlinJs],
-   and https://mill-build.org/mill/kotlinlib/android-examples.html[even-more-experimental support for Android].
+   and https://mill-build.org/mill/android/kotlin.html[even-more-experimental support for Android].
    This includes IDE integrations, tooling integrations (docs, autoformatters, linters, testing
    frameworks, etc.)
 
@@ -707,6 +837,27 @@ on large projects {link-pr}/3388[#3388]
 ** Improvements to `visualize` and `visualizePlan` such that they no longer need to be
 prefixed with `show` and no longer need a separate `graphviz`/`dot` install on Mac-OSX
 {link-pr}/3438[#3438]
+
+[#0-11-13]
+=== 0.11.13 - 2024-01-14
+:version: 0.11.13
+:milestone-name: 0.11.13
+:milestone: 100
+:prev-version: 0.11.12
+
+_Changes since {prev-version}:_
+
+
+* Security Fix: Update protobuf-java to 3.25.5 {link-pr}/3639[#3639]
+* Backport: Fixed property handling when using `--define`/`-D` from the Mill CLI. {link-pr}/3795[#3795]
+* Backport: GenIdea: Handle failure when evaluating module sources/resources {link-pr}/3755[#3755]
+* Update asm from 9.7 to 9.7.1 for Java 24 support {link-pr}/3745[#3745]
+
+
+_For details refer to
+{link-milestone}/{milestone}?closed=1[milestone {milestone-name}]
+and the {link-compare}/{prev-version}\...{version}[list of commits]._
+
 
 [#0-11-12]
 === 0.11.12 - 2024-08-20

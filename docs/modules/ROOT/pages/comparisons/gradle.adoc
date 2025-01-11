@@ -12,13 +12,13 @@ Mill, like it is in Gradle, and unlike the 5 line `<dependency>` declaration you
 Like Gradle, end users can easily customize their build to fit their exact needs without
 needing to go through the process of writing plugins.
 
-* **Mill can be xref:comparisons/gradle.adoc#_performance[2-3x faster than Gradle]**:
+* **Mill can be xref:comparisons/gradle.adoc#_performance[2-4x faster than Gradle]**:
 Although both Mill and Gradle automatically cache and parallelize your build, Mill
 does so with much less fixed overhead. This means less time waiting for your build
 tool, and more time for the things that really matter to your project.
 
 * **Mill enforces best practices by default**.
-xref:depth/evaluation-model.adoc#_caching_at_each_layer_of_the_evaluation_model[All parts of a Mill build are cached and incremental by default].
+xref:depth/execution-model.adoc#_caching_in_mill[All parts of a Mill build are cached and incremental by default].
 All Mill tasks write their output to xref:fundamentals/out-dir.adoc[a standard place].
 All task inter-dependencies are automatically captured without manual annotation. Where Gradle requires
 considerable effort and expertise to understand your build and set it up in the right way, Mill's
@@ -42,7 +42,7 @@ change any other files in the repository:
 
 The Mill build for Mockito is not 100% complete, but it covers most of the major parts of Mockito:
 compiling Java, running JUnit tests. For now, the Android, Kotlin, and OSGI tests are skipped,
-as support for xref:javalib/android-examples.adoc[Building Android apps in Mill]
+as support for xref:android/java.adoc[Building Android apps in Mill]
 and xref:kotlinlib/intro.adoc[Kotlin with Mill] is still experimental.
 
 The goal of this exercise is not to be 100% feature complete enough to replace the Gradle build

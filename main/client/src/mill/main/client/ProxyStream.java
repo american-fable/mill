@@ -120,7 +120,9 @@ public class ProxyStream {
 
     public void preRead(InputStream src) {}
 
-    public void preWrite(byte[] buffer, int length) {}
+    public void write(OutputStream dest, byte[] buffer, int length) throws IOException {
+      dest.write(buffer, 0, length);
+    }
 
     public void run() {
 
@@ -152,21 +154,17 @@ public class ProxyStream {
 
             if (delta != -1) {
               synchronized (synchronizer) {
-                this.preWrite(buffer, offset);
                 switch (stream) {
                   case ProxyStream.OUT:
-                    destOut.write(buffer, 0, offset);
+                    this.write(destOut, buffer, offset);
                     break;
                   case ProxyStream.ERR:
-                    destErr.write(buffer, 0, offset);
+                    this.write(destErr, buffer, offset);
                     break;
                 }
               }
             }
           }
-        } catch (org.newsclub.net.unix.ConnectionResetSocketException e) {
-          // This happens when you run mill shutdown and the server exits gracefully
-          break;
         } catch (IOException e) {
           // This happens when the upstream pipe was closed
           break;

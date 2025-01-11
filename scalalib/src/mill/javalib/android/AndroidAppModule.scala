@@ -1,9 +1,37 @@
 package mill.javalib.android
 
+import coursier.{MavenRepository, Repository}
 import mill._
+import mill.scalalib._
 import mill.api.PathRef
 import mill.define.ModuleRef
-import mill.scalalib.JavaModule
+import upickle.default._
+
+import scala.jdk.OptionConverters.RichOptional
+
+/**
+ * Enumeration for Android Lint report formats, providing predefined formats
+ * with corresponding flags and file extensions. Includes utility methods
+ * for implicit conversions, serialization, and retrieving all supported formats.
+ */
+object AndroidLintReportFormat extends Enumeration {
+  protected case class Format(flag: String, extension: String) extends super.Val {
+    override def toString: String = extension
+  }
+
+  implicit def valueToFormat(v: Value): Format = v.asInstanceOf[Format]
+
+  val Html: Format = Format("--html", "html")
+  val Xml: Format = Format("--xml", "xml")
+  val Txt: Format = Format("--text", "txt")
+  val Sarif: Format = Format("--sarif", "sarif")
+
+  // Define an implicit ReadWriter for the Format case class
+  implicit val formatRW: ReadWriter[Format] = macroRW
+
+  // Optional: Add a method to retrieve all possible values
+  val allFormats: List[Format] = List(Html, Xml, Txt, Sarif)
+}
 
 /**
  * Trait for building Android applications using the Mill build tool.
@@ -21,66 +49,192 @@ import mill.scalalib.JavaModule
 @mill.api.experimental
 trait AndroidAppModule extends JavaModule {
 
+  override def sources: T[Seq[PathRef]] = Task.Sources(millSourcePath / "src/main/java")
+
+  override def repositoriesTask: Task[Seq[Repository]] = Task.Anon {
+    super.repositoriesTask() ++
+      Seq(MavenRepository("https://maven.google.com"))
+  }
+
   /**
-   * Abstract method to provide access to the Android SDK configuration.
-   *
-   * This method must be implemented by the concrete class to specify the SDK paths.
-   *
-   * @return The Android SDK module that is used across the project.
+   * Provides access to the Android SDK configuration.
    */
   def androidSdkModule: ModuleRef[AndroidSdkModule]
 
   /**
-   * An XML file containing configuration and metadata about your android application
+   * Provides os.Path to an XML file containing configuration and metadata about your android application.
    */
-  def androidManifest: Task[PathRef] = Task.Source(millSourcePath / "AndroidManifest.xml")
+  def androidManifest: Task[PathRef] = Task.Source(millSourcePath / "src/main/AndroidManifest.xml")
 
   /**
-   * Generates the Android resources (such as layouts, strings, and other assets) needed
-   * for the application.
+   * Adds "aar" to the handled artifact types.
+   */
+  def artifactTypes: T[Set[coursier.Type]] = Task { super.artifactTypes() + coursier.Type("aar") }
+
+  /**
+   * Default name of the keystore file ("keyStore.jks"). Users can customize this value.
+   */
+  def androidReleaseKeyName: T[String] = Task { "keyStore.jks" }
+
+  /**
+   * Default alias in the keystore ("androidKey"). Users can customize this value.
+   */
+  def androidReleaseKeyAlias: T[String] = Task { "androidKey" }
+
+  /**
+   * Default password for the key ("android"). Users can customize this value.
+   */
+  def androidReleaseKeyPass: T[String] = Task { "android" }
+
+  /**
+   * Default password for the keystore ("android"). Users can customize this value.
+   */
+  def androidReleaseKeyStorePass: T[String] = Task { "android" }
+
+  /** The location of the keystore */
+  def releaseKeyPath: os.Path
+
+  /**
+   * Default os.Path to the keystore file, derived from `androidReleaseKeyName()`.
+   * Users can customize the keystore file name to change this path.
+   */
+  def androidReleaseKeyPath: T[PathRef] = Task.Source(releaseKeyPath / androidReleaseKeyName())
+
+  /**
+   * Specifies the file format(s) of the lint report. Available file formats are defined in AndroidLintReportFormat,
+   * such as AndroidLintReportFormat.Html, AndroidLintReportFormat.Xml, AndroidLintReportFormat.Txt, and AndroidLintReportFormat.Sarif.
+   */
+  def androidLintReportFormat: T[Seq[AndroidLintReportFormat.Value]] =
+    Task { Seq(AndroidLintReportFormat.Html) }
+
+  /**
+   * Specifies the lint configuration XML file path. This allows setting custom lint rules or modifying existing ones.
+   */
+  def androidLintConfigPath: T[Option[PathRef]] = Task { None }
+
+  /**
+   * Specifies the lint baseline XML file path. This allows using a baseline to suppress known lint warnings.
+   */
+  def androidLintBaselinePath: T[Option[PathRef]] = Task { None }
+
+  /**
+   * Determines whether the build should fail if Android Lint detects any issues.
+   */
+  def androidLintAbortOnError: Boolean = true
+
+  /**
+   * Specifies additional arguments for the Android Lint tool.
+   * Allows for complete customization of the lint command.
+   */
+  def androidLintArgs: T[Seq[String]] = Task { Seq.empty[String] }
+
+  /**
+   * Extracts JAR files and resources from AAR dependencies.
    *
-   * This method uses the Android `aapt` tool to compile resources specified in the
-   * project's `AndroidManifest.xml` and any additional resource directories. It creates
-   * the necessary R.java files and other compiled resources for Android. These generated
-   * resources are crucial for the app to function correctly on Android devices.
+   * @return Paths to extracted JAR files and resource folders.
+   */
+  def androidUnpackArchives: T[(Seq[PathRef], Seq[PathRef])] = Task {
+    val aarFiles = super.compileClasspath().map(_.path).filter(_.ext == "aar").toSeq
+    var jarFiles: Seq[PathRef] = Seq()
+    var resFolders: Seq[PathRef] = Seq()
+
+    for (aarFile <- aarFiles) {
+      val extractDir = Task.dest / aarFile.baseName
+      os.unzip(aarFile, extractDir)
+      jarFiles ++= os.walk(extractDir).filter(_.ext == "jar").map(PathRef(_))
+      val resFolder = extractDir / "res"
+      if (os.exists(resFolder)) {
+        resFolders ++= Seq(PathRef(resFolder))
+      }
+    }
+
+    (jarFiles, resFolders)
+  }
+
+  /**
+   * Combines module resources with those unpacked from AARs.
+   */
+  override def resources: T[Seq[PathRef]] = Task {
+    val (_, resFolders) = androidUnpackArchives()
+    resFolders :+ PathRef(millSourcePath / "src/main/res")
+  }
+
+  /**
+   * Replaces AAR files in classpath with their extracted JARs.
+   */
+  override def compileClasspath: T[Agg[PathRef]] = Task {
+    val (jarFiles, _) = androidUnpackArchives()
+    val jarFilesAgg = super.compileClasspath().filter(_.path.ext == "jar")
+
+    (jarFilesAgg ++ jarFiles)
+  }
+
+  /**
+   * Specifies AAPT options for Android resource compilation.
+   */
+  def androidAaptOptions: T[Seq[String]] = Task { Seq("--auto-add-overlay") }
+
+  /**
+   * Compiles Android resources and generates `R.java` and `res.apk`.
    *
-   * For more details on the aapt tool, refer to:
+   * @return PathRef to the directory with `R.java` and `res.apk`.
+   *
+   * For more details on the aapt2 tool, refer to:
    * [[https://developer.android.com/tools/aapt2 aapt Documentation]]
    */
   def androidResources: T[PathRef] = Task {
-    val genDir: os.Path = T.dest // Directory to store generated resources.
+    val destPath = Task.dest
+    val compiledResDir = destPath / "compiled"
+    val compiledLibsResDir = compiledResDir / "libs"
+    val resourceZip = collection.mutable.Buffer[os.Path]()
+    val libZips = collection.mutable.Buffer[os.Path]()
+    os.makeDir.all(compiledLibsResDir)
 
-    os.call(Seq(
-      androidSdkModule().aaptPath().path.toString, // Call aapt tool
-      "package",
-      "-f",
-      "-m",
-      "-J",
-      genDir.toString, // Generate R.java files
-      "-M",
-      androidManifest().path.toString, // Use AndroidManifest.xml
-      "-I",
-      androidSdkModule().androidJarPath().path.toString // Include Android SDK JAR
-    ))
+    for (resDir <- resources().map(_.path).filter(os.exists)) {
+      val segmentsSeq = resDir.segments.toSeq
+      val zipDir = if (segmentsSeq.last == "res") compiledResDir else compiledLibsResDir
 
-    PathRef(genDir)
+      val zipName = segmentsSeq.takeRight(2).mkString("-") + ".zip"
+      val zipPath = zipDir / zipName
+
+      if (zipDir == compiledResDir) resourceZip += zipPath else libZips += zipPath
+      os.call((androidSdkModule().aapt2Path().path, "compile", "--dir", resDir, "-o", zipPath))
+    }
+
+    val compiledLibsArgs = libZips.flatMap(zip => Seq("-R", zip.toString))
+
+    val resourceZipArg = resourceZip.headOption.map(_.toString).getOrElse("")
+
+    os.call(
+      Seq(
+        androidSdkModule().aapt2Path().path.toString,
+        "link",
+        "-I",
+        androidSdkModule().androidJarPath().path.toString,
+        "--manifest",
+        androidManifest().path.toString,
+        "--java",
+        destPath.toString,
+        "-o",
+        (destPath / "res.apk").toString
+      ) ++ androidAaptOptions() ++ compiledLibsArgs ++ Seq(resourceZipArg)
+    )
+
+    PathRef(destPath)
   }
 
   /**
    * Adds the Android SDK JAR file to the classpath during the compilation process.
    */
-  def unmanagedClasspath: T[Agg[PathRef]] = Task {
+  override def unmanagedClasspath: T[Agg[PathRef]] = Task {
     Agg(androidSdkModule().androidJarPath())
   }
 
   /**
    * Combines standard Java source directories with additional sources generated by
    * the Android resource generation step.
-   *
-   * Ensures that generated files like `R.java` (which contain references to resources)
-   * are included in the source set and compiled correctly.
    */
-  def generatedSources: T[Seq[PathRef]] = Task {
+  override def generatedSources: T[Seq[PathRef]] = Task {
     super.generatedSources() ++ Seq(androidResources())
   }
 
@@ -95,17 +249,18 @@ trait AndroidAppModule extends JavaModule {
    * [[https://developer.android.com/tools/d8 d8 Documentation]]
    */
   def androidJar: T[PathRef] = Task {
-    val jarFile: os.Path = T.dest / "app.jar"
+    val jarFile: os.Path = Task.dest / "app.jar"
 
     os.call(
       Seq(
-        androidSdkModule().d8Path().path.toString, // Call d8 tool
+        androidSdkModule().d8Path().path.toString,
         "--output",
-        jarFile.toString, // Output JAR file
-        "--no-desugaring" // Disable desugaring
-      ) ++ os.walk(compile().classes.path).filter(_.ext == "class").map(
+        jarFile.toString,
+        "--lib",
+        androidSdkModule().androidJarPath().path.toString()
+      ) ++ os.walk(compile().classes.path).filter(p => p.ext == "class").map(
         _.toString
-      ) // Get class files
+      ) ++ androidRuntimeDependencies().map(_.path.toString())
     )
 
     PathRef(jarFile)
@@ -113,46 +268,51 @@ trait AndroidAppModule extends JavaModule {
 
   /**
    * Converts the generated JAR file into a DEX file using the `d8` tool.
+   *
+   * @return os.Path to the Generated DEX File Directory
    */
   def androidDex: T[PathRef] = Task {
-    val dexOutputDir: os.Path = T.dest
 
-    os.call(
-      Seq(androidSdkModule().d8Path().path.toString, "--output", dexOutputDir.toString) ++
-        Seq(
-          androidJar().path.toString, // Use the JAR file from the previous step
-          androidSdkModule().androidJarPath().path.toString // Include Android framework classes
-        )
-    )
+    os.call((
+      androidSdkModule().d8Path().path,
+      "--output",
+      Task.dest,
+      androidJar().path,
+      "--lib",
+      androidSdkModule().androidJarPath().path
+    ))
 
-    PathRef(dexOutputDir)
+    PathRef(Task.dest)
   }
 
   /**
-   * Packages the DEX files and Android resources into an unsigned APK using the `aapt` tool.
+   * Packages DEX files and Android resources into an unsigned APK.
    *
-   * The `aapt` tool takes the DEX files (compiled code) and resources (such as layouts and assets),
-   * and packages them into an APK (Android Package) file. This APK file is unsigned and requires
-   * further processing to be distributed.
+   * @return A `PathRef` to the generated unsigned APK file (`app.unsigned.apk`).
    */
   def androidUnsignedApk: T[PathRef] = Task {
-    val unsignedApk: os.Path = T.dest / "app.unsigned.apk"
+    val unsignedApk: os.Path = Task.dest / "app.unsigned.apk"
 
-    os.call(
-      Seq(
-        androidSdkModule().aaptPath().path.toString,
-        "package",
-        "-f",
-        "-M",
-        androidManifest().path.toString, // Path to AndroidManifest.xml
-        "-I",
-        androidSdkModule().androidJarPath().path.toString, // Include Android JAR
-        "-F",
-        unsignedApk.toString // Output APK
-      ) ++ Seq(androidDex().path.toString) // Include DEX files
-    )
+    os.copy(androidResources().path / "res.apk", unsignedApk)
+    os.zip(unsignedApk, Seq(androidDex().path / "classes.dex"))
 
     PathRef(unsignedApk)
+  }
+
+  /**
+   * Gets all the jars from the classpath to be passed to d8 for packaging
+   * the app with them.
+   */
+  def androidRuntimeDependencies: T[Seq[PathRef]] = Task {
+    val androidJar = androidSdkModule().androidJarPath()
+    // TODO hack until android classpath resolution + dependencies is
+    // properly fixed
+    val dependenciesClasspath = compileClasspath().filterNot(pr =>
+      pr.path == androidJar.path
+    )
+    val compiledClassPathJars: Seq[PathRef] = dependenciesClasspath.toSeq
+
+    compiledClassPathJars
   }
 
   /**
@@ -162,20 +322,44 @@ trait AndroidAppModule extends JavaModule {
    * [[https://developer.android.com/tools/zipalign zipalign Documentation]]
    */
   def androidAlignedUnsignedApk: T[PathRef] = Task {
-    val alignedApk: os.Path = T.dest / "app.aligned.apk"
+    val alignedApk: os.Path = Task.dest / "app.aligned.apk"
 
-    os.call(
-      Seq(
-        androidSdkModule().zipalignPath().path.toString, // Call zipalign tool
-        "-f",
-        "-p",
-        "4", // Force overwrite, align with 4-byte boundary
-        androidUnsignedApk().path.toString, // Use the unsigned APK
-        alignedApk.toString // Output aligned APK
-      )
-    )
+    os.call((
+      androidSdkModule().zipalignPath().path,
+      "-f",
+      "-p",
+      "4",
+      androidUnsignedApk().path,
+      alignedApk
+    ))
 
     PathRef(alignedApk)
+  }
+
+  /**
+   * Generates the command-line arguments required for Android app signing.
+   *
+   * Uses the release keystore os.Path if available; otherwise, defaults to a standard keystore path.
+   * Includes arguments for the keystore path, key alias, and passwords.
+   *
+   * @return A `Task` producing a sequence of strings for signing configuration.
+   */
+  def androidSignKeyDetails: T[Seq[String]] = Task {
+    val keyPath = {
+      if (!os.exists(androidReleaseKeyPath().path)) { androidKeystore().path }
+      else { androidReleaseKeyPath().path }
+    }
+
+    Seq(
+      "--ks",
+      keyPath.toString,
+      "--ks-key-alias",
+      androidReleaseKeyAlias(),
+      "--ks-pass",
+      s"pass:${androidReleaseKeyStorePass()}",
+      "--key-pass",
+      s"pass:${androidReleaseKeyPass()}"
+    )
   }
 
   /**
@@ -191,28 +375,30 @@ trait AndroidAppModule extends JavaModule {
    * [[https://developer.android.com/tools/apksigner apksigner Documentation]]
    */
   def androidApk: T[PathRef] = Task {
-    val signedApk: os.Path = T.dest / "app.apk"
+    val signedApk: os.Path = Task.dest / "app.apk"
 
     os.call(
       Seq(
         androidSdkModule().apksignerPath().path.toString,
-        "sign", // Call apksigner tool
-        "--ks",
-        androidKeystore().path.toString, // Path to keystore
-        "--ks-key-alias",
-        "androidkey", // Key alias
-        "--ks-pass",
-        "pass:android", // Keystore password
-        "--key-pass",
-        "pass:android", // Key password
+        "sign",
+        "--in",
+        androidAlignedUnsignedApk().path.toString,
         "--out",
-        signedApk.toString, // Output signed APK
-        androidAlignedUnsignedApk().path.toString // Use aligned APK
-      )
+        signedApk.toString
+      ) ++ androidSignKeyDetails()
     )
-
     PathRef(signedApk)
   }
+
+  /* TODO: this needs to work as the android debug apk functionality,
+   * which uses a debug keystore in $HOME/.android/debug.keystore .
+   * For now this method is a placeholder and uses androidApk to make
+   * integration tests work
+   */
+  /**
+   * Generates a debug apk
+   */
+  def androidDebugApk: T[PathRef] = androidApk
 
   /**
    * Generates a new keystore file if it does not exist.
@@ -225,33 +411,343 @@ trait AndroidAppModule extends JavaModule {
    * [[https://docs.oracle.com/javase/8/docs/technotes/tools/windows/keytool.html keytool Documentation]]
    */
   def androidKeystore: T[PathRef] = Task(persistent = true) {
-    val keystoreFile: os.Path = T.dest / "keystore.jks"
+    val keystoreFile: os.Path = androidReleaseKeyPath().path
 
     if (!os.exists(keystoreFile)) {
-      os.call(
-        Seq(
-          "keytool",
-          "-genkeypair",
-          "-keystore",
-          keystoreFile.toString, // Generate keystore
-          "-alias",
-          "androidkey", // Alias for key in the keystore
-          "-dname",
-          "CN=MILL, OU=MILL, O=MILL, L=MILL, S=MILL, C=IN", // Key details
-          "-validity",
-          "10000", // Valid for 10,000 days
-          "-keyalg",
-          "RSA",
-          "-keysize",
-          "2048", // RSA encryption, 2048-bit key
-          "-storepass",
-          "android",
-          "-keypass",
-          "android" // Passwords
-        )
-      )
+      os.call((
+        "keytool",
+        "-genkeypair",
+        "-keystore",
+        keystoreFile,
+        "-alias",
+        "androidkey",
+        "-dname",
+        "CN=MILL, OU=MILL, O=MILL, L=MILL, S=MILL, C=MILL",
+        "-validity",
+        "10000",
+        "-keyalg",
+        "RSA",
+        "-keysize",
+        "2048",
+        "-storepass",
+        "android",
+        "-keypass",
+        "android"
+      ))
     }
 
     PathRef(keystoreFile)
+  }
+
+  /**
+   * Runs the Android Lint tool to generate a report on code quality issues.
+   *
+   * This method utilizes Android Lint, a tool provided by the Android SDK,
+   * to analyze the source code for potential bugs, performance issues, and
+   * best practices compliance. It generates a report in the specified format.
+   *
+   * The report is saved in the task's destination directory as "report.html" by
+   * default. It can be changed to other file format such as xml, txt and sarif.
+   *
+   * For more details on the Android Lint tool, refer to:
+   * [[https://developer.android.com/studio/write/lint]]
+   */
+  def androidLintRun(): Command[PathRef] = Task.Command {
+
+    val formats = androidLintReportFormat()
+
+    // Generate the alternating flag and file os.Path strings
+    val reportArg: Seq[String] = formats.flatMap { format =>
+      Seq(format.flag, (Task.dest / s"report.${format.extension}").toString)
+    }
+
+    // Set os.Path to generated `.jar` files and/or `.class` files
+    // TODO change to runClasspath once the runtime dependencies + source refs are fixed
+    val cp = compileClasspath().map(_.path).filter(os.exists).mkString(":")
+
+    // Set os.Path to the location of the project source codes
+    val src = sources().map(_.path).filter(os.exists).mkString(":")
+
+    // Set os.Path to the location of the project resource code
+    val res = resources().map(_.path).filter(os.exists).mkString(":")
+
+    // Prepare the lint configuration argument if the config os.Path is set
+    val configArg = androidLintConfigPath().map(config =>
+      Seq("--config", config.path.toString)
+    ).getOrElse(Seq.empty)
+
+    // Prepare the lint baseline argument if the baseline os.Path is set
+    val baselineArg = androidLintBaselinePath().map(baseline =>
+      Seq("--baseline", baseline.path.toString)
+    ).getOrElse(Seq.empty)
+
+    os.call(
+      Seq(
+        androidSdkModule().lintToolPath().path.toString,
+        (millSourcePath / "src/main").toString,
+        "--classpath",
+        cp,
+        "--sources",
+        src,
+        "--resources",
+        res
+      ) ++ configArg ++ baselineArg ++ reportArg ++ androidLintArgs(),
+      check = androidLintAbortOnError
+    )
+
+    PathRef(Task.dest)
+  }
+
+  /** The name of the virtual device to be created by  [[createAndroidVirtualDevice]] */
+  def androidVirtualDeviceIdentifier: String = "test"
+
+  /** The device  id as listed from avdmanager list device. Default is medium_phone */
+  def androidDeviceId: String = "medium_phone"
+
+  /**
+   * The target architecture of the virtual device to be created by  [[createAndroidVirtualDevice]]
+   *  For example, "x86_64" (default). For a list of system images and their architectures,
+   *  see the Android SDK Manager `sdkmanager --list`.
+   */
+  def androidEmulatorArchitecture: String = "x86_64"
+
+  /**
+   * Installs the user specified system image for the emulator
+   * using sdkmanager . E.g. "system-images;android-35;google_apis_playstore;x86_64"
+   */
+  def sdkInstallSystemImage(): Command[String] = Task.Command {
+    val image =
+      s"system-images;${androidSdkModule().platformsVersion()};google_apis_playstore;${androidEmulatorArchitecture}"
+    println(s"Downloading ${image}")
+    val installCall = os.call((
+      androidSdkModule().sdkManagerPath().path,
+      "--install",
+      image
+    ))
+
+    if (installCall.exitCode != 0) {
+      Task.log.error(
+        s"Error trying to install android emulator system image ${installCall.err.text()}"
+      )
+      throw new Exception(s"Failed to install system image ${image}: ${installCall.exitCode}")
+    }
+    image
+  }
+
+  /**
+   * Creates the android virtual device identified in virtualDeviceIdentifier
+   */
+  def createAndroidVirtualDevice(): Command[String] = Task.Command {
+    val command = os.call((
+      androidSdkModule().avdPath().path,
+      "create",
+      "avd",
+      "--name",
+      androidVirtualDeviceIdentifier,
+      "--package",
+      sdkInstallSystemImage()(),
+      "--device",
+      androidDeviceId,
+      "--force"
+    ))
+    if (command.exitCode != 0) {
+      Task.log.error(s"Failed to create android virtual device: ${command.err.text()}")
+      throw new Exception(s"Failed to create android virtual device: ${command.exitCode}")
+    }
+    s"DeviceName: ${androidVirtualDeviceIdentifier}, DeviceId: ${androidDeviceId}"
+  }
+
+  /**
+   * Deletes  the android device
+   */
+  def deleteAndroidVirtualDevice: T[os.CommandResult] = Task {
+    os.call((
+      androidSdkModule().avdPath().path,
+      "delete",
+      "avd",
+      "--name",
+      androidVirtualDeviceIdentifier
+    ))
+  }
+
+  /**
+   * Starts the android emulator and waits until it is booted
+   *
+   * @return The log line that indicates the emulator is ready
+   */
+  def startAndroidEmulator: T[Option[String]] = Task {
+    val ciSettings = Seq(
+      "-no-snapshot-save",
+      "-no-window",
+      "-gpu",
+      "swiftshader_indirect",
+      "-noaudio",
+      "-no-boot-anim",
+      "-camera-back",
+      "none"
+    )
+    val settings = if (sys.env.getOrElse("GITHUB_ACTIONS", "false") == "true")
+      ciSettings
+    else Seq.empty[String]
+    val command = Seq(
+      androidSdkModule().emulatorPath().path.toString(),
+      "-delay-adb",
+      "-port",
+      androidEmulatorPort
+    ) ++ settings ++ Seq("-avd", androidVirtualDeviceIdentifier)
+
+    Task.log.debug(s"Starting emulator with command ${command.mkString(" ")}")
+
+    val startEmuCmd = os.spawn(
+      command
+    )
+
+    val bootMessage = startEmuCmd.stdout.buffered.lines().filter(l => {
+      Task.log.debug(l.trim())
+      l.contains("Boot completed in")
+    }).findFirst().toScala
+
+    if (bootMessage.isEmpty) {
+      throw new Exception(s"Emulator failed to start: ${startEmuCmd.exitCode()}")
+    }
+
+    Task.log.info(s"Emulator started with message ${bootMessage}")
+
+    bootMessage
+  }
+
+  def waitForDevice: Target[String] = Task {
+    val emulator = runningEmulator()
+    os.call((
+      androidSdkModule().adbPath(),
+      "-s",
+      emulator,
+      "wait-for-device"
+    ))
+    val bootflag = os.call(
+      (
+        androidSdkModule().adbPath(),
+        "-s",
+        emulator,
+        "shell",
+        "getprop",
+        "sys.boot_completed"
+      )
+    )
+
+    Task.log.info(s"${emulator}, bootflag is ${bootflag}")
+
+    emulator
+  }
+
+  /**
+   * Stops the android emulator
+   */
+  def stopAndroidEmulator: T[String] = Task {
+    val emulator = runningEmulator()
+    os.call(
+      (androidSdkModule().adbPath().path, "-s", emulator, "emu", "kill")
+    )
+    emulator
+  }
+
+  /** The emulator port where adb connects to. Defaults to 5554 */
+  def androidEmulatorPort: String = "5554"
+
+  /**
+   * Returns the emulator identifier for created from startAndroidEmulator
+   * by iterating the adb device list
+   */
+  def runningEmulator: T[String] = Task {
+    s"emulator-${androidEmulatorPort}"
+  }
+
+  /**
+   * Installs the app to the android device identified by this configuration in [[androidVirtualDeviceIdentifier]].
+   *
+   * @return The name of the device the app was installed to
+   */
+  def androidInstall: Target[String] = Task {
+    val emulator = runningEmulator()
+
+    os.call(
+      (androidSdkModule().adbPath().path, "-s", emulator, "install", "-r", androidApk().path)
+    )
+
+    emulator
+  }
+
+  private val parent: AndroidAppModule = this
+
+  trait AndroidAppTests extends JavaTests {
+    private def testPath = parent.millSourcePath / "src/test"
+
+    override def sources: T[Seq[PathRef]] = parent.sources() :+ PathRef(testPath / "java")
+
+    override def resources: T[Seq[PathRef]] = parent.resources() :+ PathRef(testPath / "res")
+  }
+
+  trait AndroidAppIntegrationTests extends AndroidAppModule with AndroidTestModule {
+    private def androidMainSourcePath = parent.millSourcePath
+    private def androidTestPath = androidMainSourcePath / "src/androidTest"
+
+    override def androidEmulatorPort: String = parent.androidEmulatorPort
+
+    override def sources: T[Seq[PathRef]] = parent.sources() :+ PathRef(androidTestPath / "java")
+
+    /** The resources in res directories of both main source and androidTest sources */
+    override def resources: T[Seq[PathRef]] =
+      parent.resources() :+ PathRef(androidTestPath / "res")
+
+    /* TODO on debug work, an AndroidManifest.xml with debug and instrumentation settings
+     * will need to be created. Then this needs to point to the location of that debug
+     * AndroidManifest.xml
+     */
+    override def androidManifest: Task[PathRef] =
+      Task.Source(androidMainSourcePath / "src/main/AndroidManifest.xml")
+
+    override def androidVirtualDeviceIdentifier: String = parent.androidVirtualDeviceIdentifier
+    override def androidEmulatorArchitecture: String = parent.androidEmulatorArchitecture
+
+    def instrumentationPackage: String
+
+    def testFramework: T[String]
+
+    override def androidInstall: Target[String] = Task {
+      val emulator = runningEmulator()
+      os.call(
+        (
+          androidSdkModule().adbPath().path,
+          "-s",
+          emulator,
+          "install",
+          "-r",
+          androidInstantApk().path
+        )
+      )
+      emulator
+    }
+
+    def test: T[Vector[String]] = Task {
+      val device = androidInstall()
+
+      val instrumentOutput = os.call(
+        (
+          androidSdkModule().adbPath().path,
+          "-s",
+          device,
+          "shell",
+          "am",
+          "instrument",
+          "-w",
+          "-m",
+          s"${instrumentationPackage}/${testFramework()}"
+        )
+      )
+      instrumentOutput.out.lines()
+    }
+
+    /** Builds the apk including the integration tests (e.g. from androidTest) */
+    def androidInstantApk: T[PathRef] = androidDebugApk
   }
 }

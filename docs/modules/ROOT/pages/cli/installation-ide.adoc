@@ -14,12 +14,17 @@ globally.
 [#_bootstrap_scripts]
 == Bootstrap Scripts
 
-Although the Mill example projects come with their own `./mill` bootstrap script,
+Although the Mill example projects come with their own `./mill` and `./mill.bat` bootstrap script,
 you can also download it manually:
 
 [source,bash,subs="verbatim,attributes"]
 ----
+# Mac/Linux
 curl -L {mill-github-url}/releases/download/{mill-last-tag}/{mill-last-tag} > mill && chmod +x mill
+echo {mill-last-tag} > .mill-version
+
+# Windows
+curl -L {mill-github-url}/releases/download/{mill-last-tag}/{mill-last-tag}.bat -o mill.bat
 echo {mill-last-tag} > .mill-version
 ----
 
@@ -43,24 +48,26 @@ that your build server like Jenkins or Github Actions has the correct version of
 present to build, compile or test your code.
 
 If you are starting a new project using a Mill bootstrap script, you can use the
-xref:javalib/builtin-commands.adoc#_init[mill init] to initialize the project
+xref:cli/builtin-commands.adoc#_init[mill init] to initialize the project
 folder with one of the Mill example projects. There are a wide range of example projects,
 from hello-world to multi-module libraries to client-server web applications, and you can
 pick one most similar to what you are doing so you can hit the ground running working.
-
-=== Windows
-
-If you are running on Windows, you should use https://github.com/lefou/millw[lefou/millw]
-as a drop-in replacement for `./mill` that supports running on all major platforms including MS Windows.
-
-`./millw` will likely be merged into `./mill` in the near future.
 
 == IDE Support
 
 :link-metals: https://scalameta.org/metals/
 
-Mill supports IntelliJ and VSCode, both via the standard
-https://build-server-protocol.github.io/[Build Server Protocol]
+Mill supports IntelliJ and VSCode and in general any client of the standard
+https://build-server-protocol.github.io/[Build Server Protocol (BSP)].
+
+To prepare your project for IDEs, and in general any BSP client, you can run this command to generate the BSP configuration files:
+
+[source,bash]
+----
+./mill mill.bsp.BSP/install
+----
+
+Your IDEs may already auto-detect the Mill project and run this command on behalf of you, when opening/importing the project.
 
 === IntelliJ
 
@@ -138,7 +145,7 @@ https://marketplace.visualstudio.com/items?itemName=scalameta.metals[Metals VSCo
 installed. This is necessary as Mill build files are written in Scala,
 even if you are using it to build a Java project.
 
-NOTE: Mill in VSCode only supports Java and Scala. Kotlin users should use IntelliJ
+NOTE: Mill in VSCode only supports Java and Scala. Kotlin users are advised to use the free  IntelliJ IDEA Community Edition
 
 Once you have the language server installed, you can ask VSCode to open any folder
 containing a Mill `build.mill` file, and VSCode will ask you to import your
@@ -153,6 +160,10 @@ If you make changes to your Mill `build.mill`, you can ask VSCode to load
 those updates by opening the "BSP" tab and clicking the "Refresh" button
 
 image::basic/VSCodeRefresh.png[]
+
+=== Other Editors / Metals
+
+A lot of other editors may work too, since {link-metals}[Metals], the Language Server for Scala has built-in support for BSP. See the <<_ide_support,general instructions>> above.
 
 === Debugging IDE issues
 
@@ -243,3 +254,124 @@ The easiest way to use a development release is to use one of the
 `MILL_VERSION` environment variable or a `.mill-version` or `.config/mill-version` file.
 
 
+
+== Other installation methods
+
+CAUTION: The installation methods listed below are maintained outside of Mill and may not have
+the same features as the xref:cli/installation-ide.adoc#_bootstrap_scripts[bootstrap scripts]. You can try using them,
+but the officially supported way to use Mill is via the bootstrap script above, so the Mill
+maintainers may be unable to help you if you have issues with some alternate installation method.
+
+CAUTION: Some of the installations via package managers install a fixed version of Mill and
+do not support project-specific selection of the preferred Mill version. If you want to use
+the `MILL_VERSION` environment variable or need support for `.mill-version` or
+`.config/mill-version` files to control the actual used Mill version, please use
+a xref:cli/installation-ide.adoc#_bootstrap_scripts[bootstrap script] instead.
+
+=== OS X
+
+Installation via https://github.com/Homebrew/homebrew-core/blob/master/Formula/m/mill.rb[homebrew]:
+
+[source,sh]
+----
+brew install mill
+----
+
+
+=== Arch Linux
+
+Arch Linux has an https://archlinux.org/packages/extra/any/mill/[Extra package for mill]:
+
+[source,bash]
+----
+pacman -S mill
+
+----
+
+=== FreeBSD
+
+Installation via http://man.freebsd.org/pkg/8[pkg(8)]:
+
+[source,sh]
+----
+pkg install mill
+
+----
+
+=== Gentoo Linux
+
+[source,sh]
+----
+emerge dev-java/mill-bin
+
+----
+
+=== Windows
+
+To get started, download Mill from
+{mill-github-url}/releases/download/{mill-last-tag}/{mill-last-tag}-assembly[Github releases], and save it as `mill.bat`.
+
+If you're using https://scoop.sh[Scoop] you can install Mill via
+
+[source,bash]
+----
+scoop install mill
+----
+
+=== WSL / MSYS2 / Cycgin / Git-Bash
+
+Mill also works on "sh" environments on Windows (e.g.,
+https://www.msys2.org[MSYS2],
+https://www.cygwin.com[Cygwin],
+https://gitforwindows.org[Git-Bash],
+https://docs.microsoft.com/en-us/windows/wsl[WSL]); to get started, follow the instructions in the <<_manual>>
+section. Note that:
+
+* In some environments (such as WSL), Mill might have to be run without a server (using `-i`, `--interactive`, or `--no-server`.)
+
+* On Cygwin, run the following after downloading mill:
+
+[source,bash]
+----
+sed -i '0,/-cp "\$0"/{s/-cp "\$0"/-cp `cygpath -w "\$0"`/}; 0,/-cp "\$0"/{s/-cp "\$0"/-cp `cygpath -w "\$0"`/}' /usr/local/bin/mill
+----
+
+=== Docker
+
+You can download and run
+a https://hub.docker.com/r/nightscape/scala-mill/["Docker image containing OpenJDK, Scala and Mill"] using
+
+[source,bash]
+----
+docker pull nightscape/scala-mill
+docker run -it nightscape/scala-mill
+----
+
+=== Manual
+
+To get started, download Mill and install it into your HOME ".local/bin" via the following
+`curl`/`chmod` command:
+
+[source,bash,subs="verbatim,attributes"]
+----
+sh -c "curl -L {mill-github-url}/releases/download/{mill-last-tag}/{mill-last-tag} > ~/.local/bin/mill && chmod +x ~/.local/bin/mill"
+----
+
+=== Coursier (unsupported)
+
+Installing mill via `coursier` or `cs` is currently not officially supported.
+There are various issues, especially with interactive mode.
+
+=== Asdf (unsupported)
+
+You can install and manage Mill via the Multiple Runtime Version Manager - https://asdf-vm.com/[`asdf`].
+
+Support by `asdf` is currently possible by using the https://github.com/asdf-community/asdf-mill[`asdf-mill` plugin]:
+
+.Steps to install the `mill` plugin and Mill with `asdf`
+[source,bash]
+---
+asdf plugin add mill
+asdf install mill latest
+asdf global mill latest
+---

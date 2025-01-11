@@ -2,7 +2,6 @@ package mill.main.client;
 
 import static mill.main.client.OutFiles.*;
 
-import java.io.File;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
@@ -13,8 +12,6 @@ import java.nio.file.Paths;
 import java.util.Map;
 import mill.main.client.lock.Locks;
 import mill.main.client.lock.TryLocked;
-import org.newsclub.net.unix.AFUNIXSocket;
-import org.newsclub.net.unix.AFUNIXSocketAddress;
 
 /**
  * Client side code that interacts with `Server.scala` in order to launch a generic
@@ -47,7 +44,6 @@ public abstract class ServerLauncher {
     public Path serverDir;
   }
 
-  static final int tailerRefreshIntervalMillis = 2;
   final int serverProcessesLimit = 5;
   final int serverInitWaitMillis = 10000;
 
@@ -120,75 +116,62 @@ public abstract class ServerLauncher {
   }
 
   int run(Path serverDir, boolean setJnaNoSys, Locks locks) throws Exception {
-    try (final FileToStreamTailer stdoutTailer = new FileToStreamTailer(
-            new java.io.File(serverDir + "/" + ServerFiles.stdout),
-            stdout,
-            tailerRefreshIntervalMillis);
-        final FileToStreamTailer stderrTailer = new FileToStreamTailer(
-            new java.io.File(serverDir + "/" + ServerFiles.stderr),
-            stderr,
-            tailerRefreshIntervalMillis); ) {
-      stdoutTailer.start();
-      stderrTailer.start();
-      String serverPath = serverDir + "/" + ServerFiles.runArgs;
-      try (OutputStream f = Files.newOutputStream(Paths.get(serverPath))) {
-        f.write(System.console() != null ? 1 : 0);
-        Util.writeString(f, BuildInfo.millVersion);
-        Util.writeArgs(args, f);
-        Util.writeMap(env, f);
-      }
 
-      if (locks.processLock.probe()) {
-        initServer(serverDir, setJnaNoSys, locks);
-      }
+    try (OutputStream f = Files.newOutputStream(serverDir.resolve(ServerFiles.runArgs))) {
+      f.write(Util.hasConsole() ? 1 : 0);
+      Util.writeString(f, BuildInfo.millVersion);
+      Util.writeArgs(args, f);
+      Util.writeMap(env, f);
+    }
 
-      while (locks.processLock.probe()) Thread.sleep(3);
+    if (locks.processLock.probe()) initServer(serverDir, setJnaNoSys, locks);
 
-      String socketName = ServerFiles.pipe(serverDir.toString());
-      AFUNIXSocketAddress addr = AFUNIXSocketAddress.of(new File(socketName));
+    while (locks.processLock.probe()) Thread.sleep(1);
 
-      long retryStart = System.currentTimeMillis();
-      Socket ioSocket = null;
-      Throwable socketThrowable = null;
-      while (ioSocket == null && System.currentTimeMillis() - retryStart < serverInitWaitMillis) {
-        try {
-          ioSocket = AFUNIXSocket.connectTo(addr);
-        } catch (Throwable e) {
-          socketThrowable = e;
-          Thread.sleep(10);
-        }
-      }
-
-      if (ioSocket == null) {
-        throw new Exception("Failed to connect to server", socketThrowable);
-      }
-
-      InputStream outErr = ioSocket.getInputStream();
-      OutputStream in = ioSocket.getOutputStream();
-      ProxyStream.Pumper outPumper = new ProxyStream.Pumper(outErr, stdout, stderr);
-      InputPumper inPump = new InputPumper(() -> stdin, () -> in, true);
-      Thread outPumperThread = new Thread(outPumper, "outPump");
-      outPumperThread.setDaemon(true);
-      Thread inThread = new Thread(inPump, "inPump");
-      inThread.setDaemon(true);
-      outPumperThread.start();
-      inThread.start();
-
-      if (forceFailureForTestingMillisDelay > 0) {
-        Thread.sleep(forceFailureForTestingMillisDelay);
-        throw new Exception("Force failure for testing: " + serverDir);
-      }
-      outPumperThread.join();
-
+    long retryStart = System.currentTimeMillis();
+    Socket ioSocket = null;
+    Throwable socketThrowable = null;
+    while (ioSocket == null && System.currentTimeMillis() - retryStart < serverInitWaitMillis) {
       try {
-        return Integer.parseInt(
-            Files.readAllLines(Paths.get(serverDir + "/" + ServerFiles.exitCode))
-                .get(0));
+        int port = Integer.parseInt(Files.readString(serverDir.resolve(ServerFiles.socketPort)));
+        ioSocket = new java.net.Socket("127.0.0.1", port);
       } catch (Throwable e) {
-        return Util.ExitClientCodeCannotReadFromExitCodeFile();
-      } finally {
-        ioSocket.close();
+        socketThrowable = e;
+        Thread.sleep(1);
       }
+    }
+
+    if (ioSocket == null) {
+      throw new Exception("Failed to connect to server", socketThrowable);
+    }
+
+    InputStream outErr = ioSocket.getInputStream();
+    OutputStream in = ioSocket.getOutputStream();
+    ProxyStream.Pumper outPumper = new ProxyStream.Pumper(outErr, stdout, stderr);
+    InputPumper inPump = new InputPumper(() -> stdin, () -> in, true);
+    Thread outPumperThread = new Thread(outPumper, "outPump");
+    outPumperThread.setDaemon(true);
+    Thread inThread = new Thread(inPump, "inPump");
+    inThread.setDaemon(true);
+    outPumperThread.start();
+    inThread.start();
+
+    if (forceFailureForTestingMillisDelay > 0) {
+      Thread.sleep(forceFailureForTestingMillisDelay);
+      throw new Exception("Force failure for testing: " + serverDir);
+    }
+    outPumperThread.join();
+
+    try {
+      Path exitCodeFile = serverDir.resolve(ServerFiles.exitCode);
+      if (Files.exists(exitCodeFile)) {
+        return Integer.parseInt(Files.readAllLines(exitCodeFile).get(0));
+      } else {
+        System.err.println("mill-server/ exitCode file not found");
+        return 1;
+      }
+    } finally {
+      ioSocket.close();
     }
   }
 }

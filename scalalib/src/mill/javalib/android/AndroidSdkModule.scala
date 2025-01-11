@@ -27,6 +27,11 @@ trait AndroidSdkModule extends Module {
   private val remotePackagesUrl = "https://dl.google.com/android/repository/repository2-3.xml"
 
   /**
+   * Specifies the version of the Android Bundle tool to be used.
+   */
+  def bundleToolVersion: T[String]
+
+  /**
    * Specifies the version of the Android build tools to be used.
    */
   def buildToolsVersion: T[String]
@@ -35,6 +40,24 @@ trait AndroidSdkModule extends Module {
    * Specifies the Android platform version (e.g., Android API level).
    */
   def platformsVersion: T[String] = Task { "android-" + buildToolsVersion().split('.').head }
+
+  /**
+   * URL to download bundle tool, used for creating Android app bundles (AAB files).
+   */
+  def bundleToolUrl: T[String] = Task {
+    s"https://github.com/google/bundletool/releases/download/${bundleToolVersion()}/bundletool-all-${bundleToolVersion()}.jar"
+  }
+
+  /**
+   * Provides the path to the `bundleTool.jar` file, necessary for creating Android bundles.
+   *
+   * For More Read Bundle Tool [[https://developer.android.com/tools/bundletool Documentation]]
+   */
+  def bundleToolPath: T[PathRef] = Task {
+    val bundleToolJar = Task.dest / "bundleTool.jar"
+    os.write(bundleToolJar, requests.get(bundleToolUrl()).bytes)
+    PathRef(bundleToolJar)
+  }
 
   /**
    * Provides the path to the `android.jar` file, necessary for compiling Android apps.
@@ -53,21 +76,35 @@ trait AndroidSdkModule extends Module {
   }
 
   /**
+   * Provides path to the Android CLI lint tool.
+   */
+  def lintToolPath: T[PathRef] = Task {
+    installAndroidSdkComponents()
+    PathRef(sdkPath().path / "cmdline-tools" / "latest" / "bin" / "lint")
+  }
+
+  /**
    * Provides path to D8 Dex compiler, used for converting Java bytecode into Dalvik bytecode.
+   *
+   * For More Read D8 [[https://developer.android.com/tools/d8 Documentation]]
    */
   def d8Path: T[PathRef] = Task {
     PathRef(buildToolsPath().path / "d8")
   }
 
   /**
-   * Provides the path to AAPT, used for resource handling and APK packaging.
+   * Provides the path to AAPT2, used for resource handling and APK packaging.
+   *
+   * For More Read AAPT2 [[https://developer.android.com/tools/aapt2 Documentation]]
    */
-  def aaptPath: T[PathRef] = Task {
-    PathRef(buildToolsPath().path / "aapt")
+  def aapt2Path: T[PathRef] = Task {
+    PathRef(buildToolsPath().path / "aapt2")
   }
 
   /**
    * Provides the path to the Zipalign tool, which optimizes APK files by aligning their data.
+   *
+   * For More Read Zipalign [[https://developer.android.com/tools/zipalign Documentation]]
    */
   def zipalignPath: T[PathRef] = Task {
     PathRef(buildToolsPath().path / "zipalign")
@@ -75,9 +112,47 @@ trait AndroidSdkModule extends Module {
 
   /**
    * Provides the path to the APK signer tool, used to digitally sign APKs.
+   *
+   * For More Read APK Signer [[https://developer.android.com/tools/apksigner Documentation]]
    */
   def apksignerPath: T[PathRef] = Task {
     PathRef(buildToolsPath().path / "apksigner")
+  }
+
+  /**
+   * Provides the path for the Android Debug Bridge (adt) tool.
+   *
+   * For more information, refer to the official Android documentation [[https://developer.android.com/tools/adb]]
+   */
+  def adbPath: T[PathRef] = Task {
+    PathRef(sdkPath().path / "platform-tools/adb")
+  }
+
+  /**
+   * Provides the path for the Android Virtual Device Manager (avdmanager) tool
+   *
+   *  For more information refer to the official Android documentation [[https://developer.android.com/tools/avdmanager]]
+   */
+  def avdPath: T[PathRef] = Task {
+    PathRef(sdkPath().path / "cmdline-tools/latest/bin/avdmanager")
+  }
+
+  /**
+   * Provides the path for the android emulator tool
+   *
+   * For more information refer to [[https://developer.android.com/studio/run/emulator]]
+   */
+  def emulatorPath: T[PathRef] = Task {
+    PathRef(sdkPath().path / "emulator/emulator")
+  }
+
+  /**
+   * Provides the path for the Android SDK Manager tool
+   *
+   * @return A task containing a [[PathRef]] pointing to the SDK directory.
+   */
+  def sdkManagerPath: T[PathRef] = Task {
+    PathRef(sdkPath().path / "cmdline-tools/latest/bin/sdkmanager")
   }
 
   /**
@@ -85,8 +160,6 @@ trait AndroidSdkModule extends Module {
    *
    * For more details on the `sdkmanager` tool, refer to:
    * [[https://developer.android.com/tools/sdkmanager sdkmanager Documentation]]
-   *
-   * @return A task containing a [[PathRef]] pointing to the SDK directory.
    */
   def installAndroidSdkComponents: T[Unit] = Task {
     val sdkPath0 = sdkPath()
@@ -102,7 +175,8 @@ trait AndroidSdkModule extends Module {
     val packages = Seq(
       "platform-tools",
       s"build-tools;${buildToolsVersion()}",
-      s"platforms;${platformsVersion()}"
+      s"platforms;${platformsVersion()}",
+      "cmdline-tools;latest"
     )
     // sdkmanager executable and state of the installed package is a shared resource, which can be accessed
     // from the different Android SDK modules.
@@ -191,6 +265,7 @@ trait AndroidSdkModule extends Module {
   private def hexArray(arr: Array[Byte]) =
     String.format("%0" + (arr.length << 1) + "x", new BigInteger(1, arr))
 
+  // TODO consolidate with sdkmanager path
   private def findLatestSdkManager(sdkPath: os.Path): Option[os.Path] = {
     var sdkManagerPath = sdkPath / "cmdline-tools/latest/bin/sdkmanager"
     if (!os.exists(sdkManagerPath)) {
@@ -210,6 +285,7 @@ trait AndroidSdkModule extends Module {
     }
     Some(sdkManagerPath).filter(os.exists)
   }
+
 }
 
 private object AndroidSdkLock

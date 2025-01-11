@@ -2,6 +2,7 @@ package mill.util
 
 import mill.api.Loose.Agg
 import mill.api._
+import mill.main.client.ServerFiles
 import os.{ProcessOutput, SubProcess}
 
 import java.io._
@@ -25,11 +26,12 @@ object Jvm extends CoursierSupport {
       mainArgs: Seq[String] = Seq.empty,
       workingDir: os.Path = null,
       streamOut: Boolean = true,
-      check: Boolean = true
+      check: Boolean = true,
+      javaHome: Option[os.Path] = None
   )(implicit ctx: Ctx): CommandResult = {
 
     val commandArgs =
-      Vector(javaExe) ++
+      Vector(javaExe(javaHome)) ++
         jvmArgs ++
         Vector("-cp", classPath.iterator.mkString(java.io.File.pathSeparator), mainClass) ++
         mainArgs
@@ -57,6 +59,33 @@ object Jvm extends CoursierSupport {
       envArgs: Map[String, String],
       mainArgs: Seq[String],
       workingDir: os.Path,
+      streamOut: Boolean,
+      check: Boolean
+  )(implicit ctx: Ctx): CommandResult = {
+    callSubprocess(
+      mainClass,
+      classPath,
+      jvmArgs,
+      envArgs,
+      mainArgs,
+      workingDir,
+      streamOut,
+      check,
+      None
+    )
+  }
+
+  /**
+   * Runs a JVM subprocess with the given configuration and returns a
+   * [[os.CommandResult]] with it's aggregated output and error streams
+   */
+  def callSubprocess(
+      mainClass: String,
+      classPath: Agg[os.Path],
+      jvmArgs: Seq[String],
+      envArgs: Map[String, String],
+      mainArgs: Seq[String],
+      workingDir: os.Path,
       streamOut: Boolean
   )(implicit ctx: Ctx): CommandResult = {
     callSubprocess(mainClass, classPath, jvmArgs, envArgs, mainArgs, workingDir, streamOut, true)
@@ -65,9 +94,10 @@ object Jvm extends CoursierSupport {
   /**
    * Resolves a tool to a path under the currently used JDK (if known).
    */
-  def jdkTool(toolName: String): String = {
-    sys.props
-      .get("java.home")
+  def jdkTool(toolName: String, javaHome: Option[os.Path]): String = {
+    javaHome
+      .map(_.toString())
+      .orElse(sys.props.get("java.home"))
       .map(h =>
         if (isWin) new File(h, s"bin\\${toolName}.exe")
         else new File(h, s"bin/${toolName}")
@@ -77,7 +107,11 @@ object Jvm extends CoursierSupport {
 
   }
 
-  def javaExe: String = jdkTool("java")
+  def jdkTool(toolName: String): String = jdkTool(toolName, None)
+
+  def javaExe(javaHome: Option[os.Path]): String = jdkTool("java", javaHome)
+
+  def javaExe: String = javaExe(None)
 
   def defaultBackgroundOutputs(outputDir: os.Path): Option[(ProcessOutput, ProcessOutput)] =
     Some((outputDir / "stdout.log", outputDir / "stderr.log"))
@@ -107,7 +141,8 @@ object Jvm extends CoursierSupport {
       workingDir: os.Path = null,
       background: Boolean = false,
       useCpPassingJar: Boolean = false,
-      runBackgroundLogToConsole: Boolean = false
+      runBackgroundLogToConsole: Boolean = false,
+      javaHome: Option[os.Path] = None
   )(implicit ctx: Ctx): Unit = {
     runSubprocessWithBackgroundOutputs(
       mainClass,
@@ -117,12 +152,47 @@ object Jvm extends CoursierSupport {
       mainArgs,
       workingDir,
       if (!background) None
-      else if (runBackgroundLogToConsole) Some((os.Inherit, os.Inherit))
-      else Jvm.defaultBackgroundOutputs(ctx.dest),
-      useCpPassingJar
+      else if (runBackgroundLogToConsole) {
+        val pwd0 = os.Path(java.nio.file.Paths.get(".").toAbsolutePath)
+        // Hack to forward the background subprocess output to the Mill server process
+        // stdout/stderr files, so the output will get properly slurped up by the Mill server
+        // and shown to any connected Mill client even if the current command has completed
+        Some(
+          (
+            os.PathAppendRedirect(pwd0 / ".." / ServerFiles.stdout),
+            os.PathAppendRedirect(pwd0 / ".." / ServerFiles.stderr)
+          )
+        )
+      } else Jvm.defaultBackgroundOutputs(ctx.dest),
+      useCpPassingJar,
+      javaHome
     )
   }
 
+  // bincompat shim
+  def runSubprocess(
+      mainClass: String,
+      classPath: Agg[os.Path],
+      jvmArgs: Seq[String],
+      envArgs: Map[String, String],
+      mainArgs: Seq[String],
+      workingDir: os.Path,
+      background: Boolean,
+      useCpPassingJar: Boolean,
+      runBackgroundLogToConsole: Boolean
+  )(implicit ctx: Ctx): Unit =
+    runSubprocess(
+      mainClass,
+      classPath,
+      jvmArgs,
+      envArgs,
+      mainArgs,
+      workingDir,
+      background,
+      useCpPassingJar,
+      runBackgroundLogToConsole,
+      None
+    )
   // bincompat shim
   def runSubprocess(
       mainClass: String,
@@ -142,7 +212,8 @@ object Jvm extends CoursierSupport {
       mainArgs,
       workingDir,
       background,
-      useCpPassingJar
+      useCpPassingJar,
+      false
     )
 
   /**
@@ -169,7 +240,8 @@ object Jvm extends CoursierSupport {
       mainArgs: Seq[String] = Seq.empty,
       workingDir: os.Path = null,
       backgroundOutputs: Option[Tuple2[ProcessOutput, ProcessOutput]] = None,
-      useCpPassingJar: Boolean = false
+      useCpPassingJar: Boolean = false,
+      javaHome: Option[os.Path] = None
   )(implicit ctx: Ctx): Unit = {
 
     val cp =
@@ -193,7 +265,7 @@ object Jvm extends CoursierSupport {
       Seq(mainClass)
     } else Seq.empty
     val args =
-      Vector(javaExe) ++
+      Vector(javaExe(javaHome)) ++
         jvmArgs ++
         cpArgument ++
         mainClassArgument ++
@@ -206,6 +278,29 @@ object Jvm extends CoursierSupport {
     else
       runSubprocess(args, envArgs, workingDir)
   }
+
+  // bincompat shim
+  def runSubprocessWithBackgroundOutputs(
+      mainClass: String,
+      classPath: Agg[os.Path],
+      jvmArgs: Seq[String],
+      envArgs: Map[String, String],
+      mainArgs: Seq[String],
+      workingDir: os.Path,
+      backgroundOutputs: Option[Tuple2[ProcessOutput, ProcessOutput]],
+      useCpPassingJar: Boolean
+  )(implicit ctx: Ctx): Unit =
+    runSubprocessWithBackgroundOutputs(
+      mainClass,
+      classPath,
+      jvmArgs,
+      envArgs,
+      mainArgs,
+      workingDir,
+      backgroundOutputs,
+      useCpPassingJar,
+      None
+    )(ctx)
 
   /**
    * Runs a generic subprocess and waits for it to terminate. If process exited with non-zero code, exception
@@ -345,6 +440,19 @@ object Jvm extends CoursierSupport {
       body
     )
   }
+
+  def spawnClassloader(
+      classPath: Iterable[os.Path],
+      sharedPrefixes: Seq[String] = Nil,
+      parent: ClassLoader = null
+  ): java.net.URLClassLoader = {
+    mill.api.ClassLoader.create(
+      classPath.iterator.map(_.toNIO.toUri.toURL).toVector,
+      parent,
+      sharedPrefixes = sharedPrefixes
+    )(new Ctx.Home { override def home = os.home })
+  }
+
   def inprocess[T](
       classPath: Agg[os.Path],
       classLoaderOverrideSbtTesting: Boolean,
