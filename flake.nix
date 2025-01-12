@@ -39,7 +39,8 @@
       depsTmpDir = "/tmp/${cacheDir}";
       localDefaultIvyPattern = "[organisation]/[module]/(scala_[scalaVersion]/)(sbt_[sbtVersion]/)[revision]/[type]s/[artifact](-[classifier]).[ext]";
       millVersionPatch = ''
-        sed -i "s/VcsVersion.vcsState().format()/\"${version}\"/g" "./build.mill"
+        sed -i "s/else \"SNAPSHOT\"/\"${version}\"/g" "./build.mill"
+        sed -i "s/if (Task.env.contains(\"MILL_STABLE_VERSION\")) VcsVersion.calcVcsState(Task.log).format()/ /g" "./build.mill"
       ''; # patch needed to inline version value because during build can't get it from git
 
       packagesList = with pkgs; [
@@ -115,6 +116,9 @@
           echo "removing empty directories"
           find ${depsTmpDir} -type d -empty -delete
 
+          # for debuging version patching
+          cp "build.mill" ${depsTmpDir}/
+
           runHook postBuild
          '';
 
@@ -126,7 +130,7 @@
          '';
          outputHashAlgo = "sha256";
          outputHashMode = "recursive";
-         outputHash = "sha256-SUu5aKWvD7V1dX/d75qUnjeWRZRgrp5+tgH84vf2jGs=";
+         outputHash = "sha256-Rxw1k3+2ufXfx2MTjc65kdno5zlCfFHbyamjcm7+Mvk=";
          #outputHash = pkgs.lib.fakeHash;
       };
 
@@ -163,9 +167,7 @@
          src = ./.;
          doCheck = false;
 
-         patchPhase = ''
-           sed -i "s/VcsVersion.vcsState().format()/\"${version}\"/g" "./build.mill"
-         '';
+         patchPhase = millVersionPatch;
 
          buildPhase = ''
            runHook preBuild
