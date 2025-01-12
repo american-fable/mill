@@ -116,9 +116,6 @@
           echo "removing empty directories"
           find ${depsTmpDir} -type d -empty -delete
 
-          # for debuging version patching
-          cp "build.mill" ${depsTmpDir}/
-
           runHook postBuild
          '';
 
@@ -128,9 +125,10 @@
           cp -r ${depsTmpDir} $out
           runHook postInstall
          '';
+
          outputHashAlgo = "sha256";
          outputHashMode = "recursive";
-         outputHash = "sha256-Rxw1k3+2ufXfx2MTjc65kdno5zlCfFHbyamjcm7+Mvk=";
+         outputHash = "sha256-SUu5aKWvD7V1dX/d75qUnjeWRZRgrp5+tgH84vf2jGs=";
          #outputHash = pkgs.lib.fakeHash;
       };
 
