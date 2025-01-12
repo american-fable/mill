@@ -100,6 +100,12 @@
           COURSIER_CACHE='${depsTmpDir}/' ${millWrapper}/bin/mill __.prepareOffline --all
           echo content of cache is: $(ls -la ${depsTmpDir})
 
+          # these dependencies should be fetched via __.prepareOffline but they doesn't
+          # TODO: worth to reserch reason and report to upstream
+          COURSIER_CACHE='${depsTmpDir}/' cs fetch org.slf4j:jcl-over-slf4j:1.7.30
+          COURSIER_CACHE='${depsTmpDir}/' cs fetch org.slf4j:slf4j-api:1.7.30
+          COURSIER_CACHE='${depsTmpDir}/' cs fetch io.get-coursier:interface:0.0.17
+
           echo "stripping out comments containing dates"
           find ${depsTmpDir} -name '*.properties' -type f -exec sed -i '/^#/d' {} \;
           echo "removing non-reproducible accessory files"
@@ -122,7 +128,7 @@
 
          outputHashAlgo = "sha256";
          outputHashMode = "recursive";
-         outputHash = "sha256-MyCH+96z+FbkMrLXHBhy0UpZyfswsJRYu/RJHH1X1O4=";
+         outputHash = "sha256-SUu5aKWvD7V1dX/d75qUnjeWRZRgrp5+tgH84vf2jGs=";
          #outputHash = pkgs.lib.fakeHash;
       };
 
