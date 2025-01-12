@@ -33,7 +33,7 @@
     system:
     let
       pkgs = import nixpkgs { inherit system; };
-      millPrebuildVersion = "0.12.0"; # version of prebuild mill artifact
+      millPrebuildVersion = "0.12.4-23-2ff492"; # version of prebuild mill artifact (for 0.12.5)
       version = self.shortRev or "dirty"; # target version
       cacheDir = "cs_cache"; # custom coursier cache folder name
       depsTmpDir = "/tmp/${cacheDir}";
@@ -52,7 +52,7 @@
 
       millPrebuild = pkgs.fetchurl {
         url = "https://repo1.maven.org/maven2/com/lihaoyi/mill-dist/${millPrebuildVersion}/mill-dist-${millPrebuildVersion}-assembly.jar";
-        hash = "sha256-w+IYHHDI8bxHYVK3yEVL7QKHlsduAfTMuFzz1s165Bo=";
+        hash = "sha256-zfQ03mU/Qg3KXqbRdYRcXCABhCoI0uY2rHqpwRyKKxw=";
       };
 
       millWrapper = pkgs.stdenv.mkDerivation {
@@ -92,10 +92,18 @@
          buildPhase = ''
           runHook preBuild
 
+          rm -rf ${depsTmpDir}
+          rm -rf out
           mkdir -p ${depsTmpDir}
-          COURSIER_CACHE='${depsTmpDir}/' mill clean
-          COURSIER_CACHE='${depsTmpDir}/' mill __.prepareOffline --all
+          COURSIER_CACHE='${depsTmpDir}/' ${millWrapper}/bin/mill clean
+          COURSIER_CACHE='${depsTmpDir}/' ${millWrapper}/bin/mill __.prepareOffline --all
           echo content of cache is: $(ls -la ${depsTmpDir})
+
+          # these dependencies should be fetched via __.prepareOffline but they doesn't
+          # TODO: worth to reserch reason and report to upstream
+          COURSIER_CACHE='${depsTmpDir}/' cs fetch org.slf4j:jcl-over-slf4j:1.7.30
+          COURSIER_CACHE='${depsTmpDir}/' cs fetch org.slf4j:slf4j-api:1.7.30
+          COURSIER_CACHE='${depsTmpDir}/' cs fetch io.get-coursier:interface:0.0.17
 
           echo "stripping out comments containing dates"
           find ${depsTmpDir} -name '*.properties' -type f -exec sed -i '/^#/d' {} \;
@@ -118,7 +126,7 @@
          '';
          outputHashAlgo = "sha256";
          outputHashMode = "recursive";
-         outputHash = "sha256-pcHBXPm/Pb95WIyjbeiiyLRg3XOvXZhD3CXoyqQEZ7M=";
+         outputHash = "sha256-SUu5aKWvD7V1dX/d75qUnjeWRZRgrp5+tgH84vf2jGs=";
          #outputHash = pkgs.lib.fakeHash;
       };
 
@@ -136,7 +144,7 @@
 
           mkdir -p /tmp/home/
           cp -r '${millDependencies}/${cacheDir}/' /tmp/home
-          _JAVA_OPTIONS=-Duser.home='/tmp/home' COURSIER_CACHE='/tmp/home/${cacheDir}/' mill dist.publishLocal
+          HOME='/tmp/home' _JAVA_OPTIONS=-Duser.home='/tmp/home' COURSIER_CACHE='/tmp/home/${cacheDir}/' mill dist.publishLocal
 
           runHook postBuild
         '';
@@ -175,7 +183,6 @@
 
            makeWrapper $out/bin/.mill $out/bin/mill \
              --set COURSIER_REPOSITORIES "ivy:file://${millLibraries}/.ivy2/local/${localDefaultIvyPattern}|ivy2Local|central|sonatype:releases"
-
            runHook postInstall
          '';
       };
@@ -186,13 +193,17 @@
         buildInputs = packagesList ++ [millWrapper millDependencies];
         shellHook = ''
           echo prebuild mill path: ${millPrebuild}
+          echo mill wrapper: ${millWrapper}
           echo git mill dependencies path: ${millDependencies}
           echo git mill libraries path: ${millLibraries}
           echo final mill path: ${millBuild}
         '';
       };
+
+      packages = { inherit millPrebuild millWrapper millDependencies millLibraries millBuild; };
       packages.mill = millBuild;
       packages.default = millBuild;
+
     }
   );
 }
