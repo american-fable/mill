@@ -33,10 +33,10 @@
     system:
     let
       pkgs = import nixpkgs { inherit system; };
-      millPrebuildVersion = "0.12.4-23-2ff492"; # version of prebuild mill artifact (for 0.12.5)
+      millPrebuiltVersion = "0.12.4-23-2ff492"; # version of prebuilt mill artifact (for 0.12.5)
       version = self.shortRev or "dirty"; # target version
       cacheDir = "cs_cache"; # custom coursier cache folder name
-      depsTmpDir = "/tmp/${cacheDir}";
+      depsTmpDir = "/tmp/${cacheDir}"; # this is inside derivation sandbox (nix sandboxing build env by default)
       localDefaultIvyPattern = "[organisation]/[module]/(scala_[scalaVersion]/)(sbt_[sbtVersion]/)[revision]/[type]s/[artifact](-[classifier]).[ext]";
       millVersionPatch = ''
         sed -i "s/else \"SNAPSHOT\"/\"${version}\"/g" "./build.mill"
@@ -51,19 +51,19 @@
         coursier
       ];
 
-      millPrebuild = pkgs.fetchurl {
-        url = "https://repo1.maven.org/maven2/com/lihaoyi/mill-dist/${millPrebuildVersion}/mill-dist-${millPrebuildVersion}-assembly.jar";
+       millPrebuilt = pkgs.fetchurl {
+        url = "https://repo1.maven.org/maven2/com/lihaoyi/mill-dist/${millPrebuiltVersion}/mill-dist-${millPrebuiltVersion}-assembly.jar";
         hash = "sha256-zfQ03mU/Qg3KXqbRdYRcXCABhCoI0uY2rHqpwRyKKxw=";
       };
 
       millWrapper = pkgs.stdenv.mkDerivation {
-         name = "mill-${millPrebuildVersion}";
+         name = "mill-${millPrebuiltVersion}";
          buildInputs = packagesList;
          nativeBuildInputs = packagesList ++ [ pkgs.makeWrapper ];
          dontUnpack = true;
          installPhase = ''
            runHook preInstall
-           install -Dm555 ${millPrebuild} "$out/bin/.mill-wrapped"
+           install -Dm555 ${millPrebuilt} "$out/bin/.mill-wrapped"
            makeWrapper "$out/bin/.mill-wrapped" "$out/bin/mill" \
              --prefix PATH : "${pkgs.openjdk21}/bin" \
              --set JAVA_HOME "${pkgs.openjdk21}"
@@ -100,7 +100,7 @@
           COURSIER_CACHE='${depsTmpDir}/' ${millWrapper}/bin/mill __.prepareOffline --all
           echo content of cache is: $(ls -la ${depsTmpDir})
 
-          # these dependencies should be fetched via __.prepareOffline but they doesn't
+          # these dependencies should be fetched via __.prepareOffline but they aren't
           # TODO: worth to reserch reason and report to upstream
           COURSIER_CACHE='${depsTmpDir}/' cs fetch org.slf4j:jcl-over-slf4j:1.7.30
           COURSIER_CACHE='${depsTmpDir}/' cs fetch org.slf4j:slf4j-api:1.7.30
@@ -192,7 +192,7 @@
       devShells.default = pkgs.mkShell { 
         buildInputs = packagesList ++ [millWrapper millDependencies];
         shellHook = ''
-          echo prebuild mill path: ${millPrebuild}
+          echo prebuild mill path: ${millPrebuilt}
           echo mill wrapper: ${millWrapper}
           echo git mill dependencies path: ${millDependencies}
           echo git mill libraries path: ${millLibraries}
@@ -200,7 +200,7 @@
         '';
       };
 
-      packages = { inherit millPrebuild millWrapper millDependencies millLibraries millBuild; };
+      packages = { inherit millPrebuilt millWrapper millDependencies millLibraries millBuild; };
       packages.mill = millBuild;
       packages.default = millBuild;
 
